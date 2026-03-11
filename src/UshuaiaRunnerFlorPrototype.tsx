@@ -1109,7 +1109,7 @@ export default function UshuaiaRunnerFlorPrototype() {
           <div className="hero-block">
             <h1 className="hero-title">Run Flow Run</h1>
             <p className="hero-copy">
-              Sos un agente de Delver y tenes que superar obstaculos en el muelle!
+              Sos un agente de Delver y tenés que superar obstáculos en el muelle!
             </p>
           </div>
 
@@ -1371,3 +1371,4 @@ export default function UshuaiaRunnerFlorPrototype() {
     </div>
   );
 }
+

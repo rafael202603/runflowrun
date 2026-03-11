@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "build:pages": "tsc -b && vite build --mode github-pages",
     "preview": "vite preview",
     "serve:dist": "powershell -ExecutionPolicy Bypass -File ./run-local.ps1"
   },
