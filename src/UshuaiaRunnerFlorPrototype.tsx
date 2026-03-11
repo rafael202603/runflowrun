@@ -1819,7 +1819,7 @@ export default function UshuaiaRunnerFlorPrototype() {
                           boxShadow: "0 12px 30px rgba(56, 189, 248, 0.28)",
                         }}
                       >
-                        Empezar de nuevo
+                        {"Presion\u00E1 Enter para empezar de nuevo"}
                       </button>
                     </div>
                   </div>
