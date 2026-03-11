@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 
-type ObstacleType = "etios" | "prefectura" | "barrels" | "forklift" | "container" | "suitcase" | "ypfTruck";
-type Phase = "ready" | "running" | "gameover";
+type ObstacleType = "etios" | "prefectura" | "barrels" | "forklift" | "container" | "suitcase" | "ypfTruck" | "quizStar";
+type Phase = "ready" | "running" | "quiz" | "gameover";
 
 type PlayerState = {
   x: number;
@@ -21,6 +21,8 @@ type Obstacle = {
   w: number;
   h: number;
   bob: number;
+  baseY: number;
+  collected?: boolean;
 };
 
 type Particle = {
@@ -32,16 +34,42 @@ type Particle = {
   size: number;
 };
 
+type ScorePopup = {
+  x: number;
+  y: number;
+  vy: number;
+  life: number;
+  text: string;
+  color: string;
+};
+
+type QuizQuestion = {
+  prompt: string;
+  answers: [string, string, string];
+  correctIndex: number;
+};
+
+type ActiveQuiz = {
+  questionIndex: number;
+  remainingMs: number;
+};
+
 type GameState = {
   phase: Phase;
   speed: number;
   distance: number;
   bestDistance: number;
+  score: number;
   worldTime: number;
   nextObstacleDistance: number;
+  nextStarDistance: number;
   player: PlayerState;
   obstacles: Obstacle[];
   particles: Particle[];
+  activeQuiz: ActiveQuiz | null;
+  quizOrder: number[];
+  nextQuizQuestionIndex: number;
+  scorePopups: ScorePopup[];
 };
 
 const W = 360;
@@ -67,6 +95,10 @@ const DINO_FLYING_YPOS = [100, 75, 50] as const;
 const DINO_TREX_HEIGHT = 47;
 const PLAYER_STAND_HEIGHT = 28;
 const PLAYER_DUCK_HEIGHT = 20;
+const QUIZ_STAR_SIZE = 32;
+const QUIZ_DURATION_MS = 10000;
+const QUIZ_SCORE_DELTA = 5000;
+const QUIZ_STAR_YPOS = [GROUND_Y - 84, GROUND_Y - 66, GROUND_Y - 48] as const;
 
 // Dino uses smaller effective speed on narrower screens.
 const HORIZONTAL_SPEED_SCALE = (W / DINO_DEFAULT_WIDTH) * 1.2;
@@ -162,8 +194,174 @@ const CHARACTERS = [
   { id: "josefina", name: "Josefina", status: "available" },
 ] as const;
 
+const QUIZ_QUESTIONS: QuizQuestion[] = [
+  {
+    prompt: "\xbfCon cu\xe1ntos vessels distintos trabaj\xf3 Delver esta temporada 25-26? (Ops)",
+    answers: ["24", "29", "32"] as [string, string, string],
+    correctIndex: 0,
+  },
+  {
+    prompt: "Al cierre de temporada 25-26, \xbfcu\xe1ntas recaladas atendimos entre Ops + Shipments + Suppliers?",
+    answers: ["295", "311", "325"] as [string, string, string],
+    correctIndex: 1,
+  },
+  {
+    prompt: "\xbfCu\xe1ntas personas forman hoy el equipo Delver?",
+    answers: ["75", "83", "78"] as [string, string, string],
+    correctIndex: 1,
+  },
+  {
+    prompt: "\xbfQu\xe9 participaci\xf3n del mercado ant\xe1rtico agenciamos hoy?",
+    answers: ["38%", "entre 40% y 50%", "62%"] as [string, string, string],
+    correctIndex: 1,
+  },
+  {
+    prompt: "\xbfCu\xe1ntos contenedores entregamos esta temporada?",
+    answers: ["179", "195", "253"] as [string, string, string],
+    correctIndex: 0,
+  },
+  {
+    prompt: "\xbfCu\xe1ntas AVE visas emiti\xf3 Crewing esta temporada?",
+    answers: ["148", "173", "196"] as [string, string, string],
+    correctIndex: 1,
+  },
+  {
+    prompt: "Si sum\xe1ramos pasajeros + crew de todos los barcos a los que abastecimos con Suppliers, \xbfde cu\xe1ntas personas estamos hablando?",
+    answers: ["entre 5.000 y 5.500", "entre 9.000 y 9.200", "m\xe1s de 10 mil personas"] as [string, string, string],
+    correctIndex: 2,
+  },
+  {
+    prompt: "\xbfCu\xe1l es el total de crew que hicieron ON/OFF con nosotros esta temporada?",
+    answers: ["1.180", "1.340", "1.520"] as [string, string, string],
+    correctIndex: 1,
+  },
+  {
+    prompt: "Seg\xfan las encuestas enviadas, \xbfqu\xe9 porcentaje de satisfacci\xf3n se logr\xf3 esta temporada?",
+    answers: ["91%", "94%", "97%"] as [string, string, string],
+    correctIndex: 1,
+  },
+  {
+    prompt: "\xbfCu\xe1ntas carpetas de stock (carga + descarga) se generaron esta temporada?",
+    answers: ["108", "126", "142"] as [string, string, string],
+    correctIndex: 1,
+  },
+  {
+    prompt: "\xbfCu\xe1ntas horas cami\xf3n se contrataron por Shipments esta temporada?",
+    answers: ["410", "465", "520"] as [string, string, string],
+    correctIndex: 1,
+  },
+  {
+    prompt: "\xbfCu\xe1ntas manos de estiba se contrataron esta temporada?",
+    answers: ["690", "780", "845"] as [string, string, string],
+    correctIndex: 1,
+  },
+  {
+    prompt: "\xbfCu\xe1ntos litros de nafta se vendieron esta temporada?",
+    answers: ["92", "108", "121"] as [string, string, string],
+    correctIndex: 1,
+  },
+  {
+    prompt: "\xbfCu\xe1ntos drums de nafta se entregaron esta temporada?",
+    answers: ["179", "195", "253"] as [string, string, string],
+    correctIndex: 1,
+  },
+  {
+    prompt: "\xbfCu\xe1l fue la mediana de d\xedas de demora de facturaci\xf3n desde el ETD esta temporada?",
+    answers: ["52", "39", "31"] as [string, string, string],
+    correctIndex: 2,
+  },
+  {
+    prompt: "\xbfCu\xe1l fue la mediana de d\xedas de demora de facturaci\xf3n la temporada pasada 24-25?",
+    answers: ["54", "67", "59"] as [string, string, string],
+    correctIndex: 2,
+  },
+  {
+    prompt: "\xbfCu\xe1ntos veh\xedculos componen hoy la flota Delver?",
+    answers: ["18", "21", "24"] as [string, string, string],
+    correctIndex: 1,
+  },
+  {
+    prompt: "Al 06/03/2026, \xbfcu\xe1ntas recaladas llevaba ejecutadas la temporada?",
+    answers: ["293", "305", "342"] as [string, string, string],
+    correctIndex: 0,
+  },
+  {
+    prompt: "Al 06/03/2026, \xbfcu\xe1ntas recaladas estaban proyectadas para toda la temporada?",
+    answers: ["325", "342", "356"] as [string, string, string],
+    correctIndex: 1,
+  },
+  {
+    prompt: "Al 06/03/2026, \xbfcu\xe1ntos documentos hab\xeda procesado One Flow?",
+    answers: ["5.480", "6.930", "7.520"] as [string, string, string],
+    correctIndex: 1,
+  },
+  {
+    prompt: "Al 06/03/2026, \xbfqu\xe9 porcentaje aproximado de la temporada ya estaba ejecutado?",
+    answers: ["79%", "86%", "91%"] as [string, string, string],
+    correctIndex: 1,
+  },
+  {
+    prompt: "Al 06/03/2026, \xbfcu\xe1ntas recaladas quedaban pendientes para completar la temporada proyectada?",
+    answers: ["39", "49", "59"] as [string, string, string],
+    correctIndex: 1,
+  },
+  {
+    prompt: "En promedio, al corte del 06/03, \xbfcu\xe1ntos documentos se hab\xedan procesado por recalada?",
+    answers: ["18", "24", "31"] as [string, string, string],
+    correctIndex: 1,
+  },
+  {
+    prompt: "\xbfQu\xe9 significa ZDR?",
+    answers: ["Zone Dispatch Review", "Zero Discrepancy Report", "Zonal Delay Registry"] as [string, string, string],
+    correctIndex: 1,
+  },
+  {
+    prompt: "\xbfA cu\xe1ntos d\xedas del ETD se emite el ZDR REPORT?",
+    answers: ["14 d\xedas", "21 d\xedas", "30 d\xedas"] as [string, string, string],
+    correctIndex: 1,
+  },
+  {
+    prompt: "\xbfCu\xe1l es el mes con m\xe1s recaladas concurrentes?",
+    answers: ["Diciembre", "Enero", "Febrero"] as [string, string, string],
+    correctIndex: 1,
+  },
+  {
+    prompt: "Del total del mercado ant\xe1rtico mundial, \xbfqu\xe9 porcentaje aproximado tiene a Ushuaia como puerto de salida-llegada?",
+    answers: ["71%", "78%", "86%"] as [string, string, string],
+    correctIndex: 2,
+  },
+  {
+    prompt: "\xbfCu\xe1ntas noches de hotel gestion\xf3 Crewing esta temporada?",
+    answers: ["420", "560", "730"] as [string, string, string],
+    correctIndex: 1,
+  },
+  {
+    prompt: "\xbfCu\xe1l fue el buque al que se le emiti\xf3 la factura m\xe1s grande en US$?",
+    answers: ["Ocean Victory", "Fridtjof Nansen", "Roald Amundsen"] as [string, string, string],
+    correctIndex: 1,
+  },
+  {
+    prompt: "\xbfCu\xe1ntos servicios promedio tuvo una recalada con Delver?",
+    answers: ["1,4", "1,8", "2,3"] as [string, string, string],
+    correctIndex: 1,
+  },
+];
+
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 const pick = <T,>(items: T[]): T => items[Math.floor(Math.random() * items.length)];
+
+function createQuizOrder() {
+  const order = QUIZ_QUESTIONS.map((_, index) => index);
+  for (let index = order.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(Math.random() * (index + 1));
+    [order[index], order[swapIndex]] = [order[swapIndex]!, order[index]!];
+  }
+  return order;
+}
+
+function getNextStarDistance(distance: number) {
+  return distance + 240 + Math.random() * 140;
+}
 
 function createInitialState(): GameState {
   return {
@@ -171,8 +369,10 @@ function createInitialState(): GameState {
     speed: START_SPEED,
     distance: 0,
     bestDistance: 0,
+    score: 0,
     worldTime: 0,
     nextObstacleDistance: 100,
+    nextStarDistance: getNextStarDistance(0),
     player: {
       x: 48,
       rise: 0,
@@ -185,11 +385,15 @@ function createInitialState(): GameState {
     },
     obstacles: [],
     particles: [],
+    activeQuiz: null,
+    quizOrder: createQuizOrder(),
+    nextQuizQuestionIndex: 0,
+    scorePopups: [],
   };
 }
 
-function obstaclePool(distance: number): Array<Omit<Obstacle, "x" | "bob">> {
-  const pool: Array<Omit<Obstacle, "x" | "bob">> = [
+function obstaclePool(distance: number): Array<Omit<Obstacle, "x" | "bob" | "baseY" | "collected">> {
+  const pool: Array<Omit<Obstacle, "x" | "bob" | "baseY" | "collected">> = [
     { type: "etios", w: 34, h: 17, y: GROUND_Y - 17 },
     { type: "prefectura", w: 14, h: 27, y: GROUND_Y - 27 },
   ];
@@ -206,21 +410,34 @@ function createObstacle(distance: number): Obstacle {
       type: "ypfTruck",
       x: W + 24,
       y: GROUND_Y - 36,
+      baseY: GROUND_Y - 36,
       w: 120,
       h: 36,
       bob: 0,
     };
   }
   const base = pick(obstaclePool(distance));
-  const obstacle: Obstacle = {
+  const resolvedY = base.type === "suitcase" ? pick([...SUITCASE_FLYING_YPOS]) : base.y;
+  return {
     ...base,
     x: W + 20,
+    y: resolvedY,
+    baseY: resolvedY,
     bob: Math.random() * Math.PI * 2,
   };
-  if (obstacle.type === "suitcase") {
-    obstacle.y = pick([...SUITCASE_FLYING_YPOS]);
-  }
-  return obstacle;
+}
+
+function createQuizStar(): Obstacle {
+  const baseY = pick([...QUIZ_STAR_YPOS]);
+  return {
+    type: "quizStar",
+    x: W + 28,
+    y: baseY,
+    baseY,
+    w: QUIZ_STAR_SIZE,
+    h: QUIZ_STAR_SIZE,
+    bob: Math.random() * Math.PI * 2,
+  };
 }
 
 function getNextObstacleGap(obstacle: Obstacle, speed: number): number {
@@ -232,6 +449,7 @@ function getNextObstacleGap(obstacle: Obstacle, speed: number): number {
     container: 120,
     suitcase: 150,
     ypfTruck: 290,
+    quizStar: 190,
   };
   const scaledBaseMinGap = baseMinGapMap[obstacle.type] * (W / DINO_DEFAULT_WIDTH);
   const minGap = Math.round(obstacle.w * speed + scaledBaseMinGap * DINO_GAP_COEFFICIENT);
@@ -239,27 +457,37 @@ function getNextObstacleGap(obstacle: Obstacle, speed: number): number {
   return minGap + Math.random() * (maxGap - minGap);
 }
 
-function getObstacleHitbox(obstacle: Obstacle) {
-  switch (obstacle.type) {
-    case "prefectura":
-      return { x: obstacle.x + 3, y: obstacle.y + 2, w: 8, h: 23 };
-    case "etios":
-      return { x: obstacle.x + 1, y: obstacle.y + 3, w: 31, h: 12 };
-    case "barrels":
-      return { x: obstacle.x + 2, y: obstacle.y + 1, w: 10, h: 16 };
-    case "forklift":
-      return { x: obstacle.x + 1, y: obstacle.y + 2, w: 28, h: 18 };
-    case "container":
-      return { x: obstacle.x + 1, y: obstacle.y + 1, w: 28, h: 21 };
-    case "suitcase":
-      return { x: obstacle.x + 1, y: obstacle.y + 2, w: 14, h: 18 };
-    case "ypfTruck":
-      return { x: obstacle.x + 2, y: obstacle.y + 10, w: 116, h: 24 };
+function getAnimatedObstacleY(obstacle: Obstacle, worldTime: number) {
+  if (obstacle.type === "suitcase") {
+    return obstacle.baseY + Math.round(Math.sin(worldTime * 0.01 + obstacle.bob) * 1);
   }
+  if (obstacle.type === "quizStar") {
+    const hop = Math.abs(Math.sin(worldTime * 0.015 + obstacle.bob));
+    return obstacle.baseY - Math.round(hop * 8);
+  }
+  return obstacle.baseY;
 }
 
-function getTruckPlatform(obstacle: Obstacle) {
-  return { x: obstacle.x + 14, y: obstacle.y + 1, w: 84, h: 4 };
+function getObstacleHitbox(obstacle: Obstacle, worldTime = 0) {
+  const y = getAnimatedObstacleY(obstacle, worldTime);
+  switch (obstacle.type) {
+    case "prefectura":
+      return { x: obstacle.x + 3, y: y + 2, w: 8, h: 23 };
+    case "etios":
+      return { x: obstacle.x + 1, y: y + 3, w: 31, h: 12 };
+    case "barrels":
+      return { x: obstacle.x + 2, y: y + 1, w: 10, h: 16 };
+    case "forklift":
+      return { x: obstacle.x + 1, y: y + 2, w: 28, h: 18 };
+    case "container":
+      return { x: obstacle.x + 1, y: y + 1, w: 28, h: 21 };
+    case "suitcase":
+      return { x: obstacle.x + 1, y: y + 2, w: 14, h: 18 };
+    case "ypfTruck":
+      return { x: obstacle.x + 2, y: y + 10, w: 116, h: 24 };
+    case "quizStar":
+      return { x: obstacle.x + 4, y: y + 3, w: obstacle.w - 8, h: obstacle.h - 8 };
+  }
 }
 
 function getPlayerMetrics(player: PlayerState) {
@@ -271,11 +499,34 @@ function getPlayerMetrics(player: PlayerState) {
   return { airborne, ducking, width, height, top };
 }
 
-function collides(player: PlayerState, obstacle: Obstacle): boolean {
+function collides(player: PlayerState, obstacle: Obstacle, worldTime: number): boolean {
   const metrics = getPlayerMetrics(player);
   const p = { x: player.x + 2, y: metrics.top + 2, w: metrics.width - 4, h: metrics.height - 3 };
-  const o = getObstacleHitbox(obstacle);
+  const o = getObstacleHitbox(obstacle, worldTime);
   return p.x < o.x + o.w && p.x + p.w > o.x && p.y < o.y + o.h && p.y + p.h > o.y;
+}
+
+function createScorePopup(text: string, color: string): ScorePopup {
+  return {
+    x: W / 2,
+    y: 74,
+    vy: -0.32,
+    life: 1150,
+    text,
+    color,
+  };
+}
+
+function updateScorePopups(scorePopups: ScorePopup[], elapsedMs: number, dt: number) {
+  for (const popup of scorePopups) {
+    popup.y += popup.vy * dt;
+    popup.life -= elapsedMs;
+  }
+  return scorePopups.filter((popup) => popup.life > 0);
+}
+
+function getTruckPlatform(obstacle: Obstacle) {
+  return { x: obstacle.x + 14, y: obstacle.baseY + 1, w: 84, h: 4 };
 }
 
 function settlePlayerOnTruck(player: PlayerState, obstacles: Obstacle[], previousBottom: number): boolean {
@@ -613,11 +864,66 @@ function drawYpfTruck(ctx: CanvasRenderingContext2D, x: number, y: number) {
   }
 }
 
-function drawObstacle(ctx: CanvasRenderingContext2D, obstacle: Obstacle, worldTime: number) {
-  const bobOffset = obstacle.type === "suitcase" ? Math.round(Math.sin(worldTime * 0.01 + obstacle.bob) * 1) : 0;
+function drawSparkle(ctx: CanvasRenderingContext2D, x: number, y: number, size: number, alpha = 1) {
+  const previousAlpha = ctx.globalAlpha;
+  ctx.globalAlpha = alpha;
+  drawRect(ctx, x + size, y, size, size * 3, "#fffbea");
+  drawRect(ctx, x, y + size, size * 3, size, "#fffbea");
+  drawRect(ctx, x + size, y + size, size, size, "#ffe27a");
+  ctx.globalAlpha = previousAlpha;
+}
+
+function drawQuizStar(ctx: CanvasRenderingContext2D, obstacle: Obstacle, worldTime: number) {
   const x = obstacle.x;
-  const y = obstacle.y + bobOffset;
-  if (obstacle.type === "prefectura") drawPrefectura(ctx, x, y);
+  const y = getAnimatedObstacleY(obstacle, worldTime);
+  const scale = obstacle.w / QUIZ_STAR_SIZE;
+  const px = (value: number) => Math.round(value * scale);
+  const drift = Math.sin(worldTime * 0.014 + obstacle.bob) * 1.6;
+  const starY = y + drift;
+  const toPoints = (points: Array<[number, number]>): Array<[number, number]> =>
+    points.map(([pointX, pointY]) => [x + px(pointX), starY + px(pointY)]);
+  const outline = toPoints([[16, 1], [20, 10], [30, 11], [23, 18], [26, 30], [16, 24], [6, 30], [9, 18], [2, 11], [12, 10]]);
+  const border = toPoints([[16, 3], [19, 10], [28, 11], [22, 18], [24, 28], [16, 22], [8, 28], [10, 18], [4, 11], [13, 10]]);
+  const fill = toPoints([[16, 4], [19, 11], [27, 12], [21, 18], [23, 27], [16, 22], [9, 27], [11, 18], [5, 12], [13, 11]]);
+  const glow = toPoints([[16, 6], [18, 11], [24, 13], [20, 18], [21, 23], [16, 20], [11, 23], [12, 18], [8, 13], [14, 11]]);
+  const topGloss = toPoints([[8, 9], [12, 7], [16, 7], [13, 10], [9, 11]]);
+  const sideGloss = toPoints([[7, 18], [9, 15], [10, 16], [9, 22], [7, 25], [6, 22]]);
+  const lowerShade = toPoints([[16, 20], [21, 23], [20, 26], [16, 24], [12, 26], [11, 23]]);
+  const trail = [0.18, 0.12, 0.08, 0.05];
+
+  for (let i = 0; i < trail.length; i += 1) {
+    const alpha = trail[i]!;
+    drawSparkle(
+      ctx,
+      x + px(13 + i * 2.4),
+      y + px(10) + Math.sin(worldTime * 0.02 + obstacle.bob + i) * 2,
+      Math.max(1, px(1 + i * 0.35)),
+      alpha
+    );
+  }
+
+  drawPoly(ctx, outline, 'rgba(7, 10, 28, 0.88)');
+  drawPoly(ctx, border, '#ffca05');
+  drawPoly(ctx, fill, '#fff200');
+  drawPoly(ctx, glow, 'rgba(255, 250, 210, 0.92)');
+  drawPoly(ctx, topGloss, 'rgba(255, 255, 255, 0.9)');
+  drawPoly(ctx, sideGloss, 'rgba(255, 255, 255, 0.62)');
+  drawPoly(ctx, lowerShade, 'rgba(248, 190, 10, 0.72)');
+  drawRect(ctx, x + px(11), starY + px(12), px(3), px(6), '#141414');
+  drawRect(ctx, x + px(18), starY + px(12), px(3), px(6), '#141414');
+  drawRect(ctx, x + px(12), starY + px(13), px(1), px(2), '#fffbea');
+  drawRect(ctx, x + px(19), starY + px(13), px(1), px(2), '#fffbea');
+  drawRect(ctx, x + px(7), starY + px(9), px(7), px(1), 'rgba(255,255,255,0.7)');
+  drawSparkle(ctx, x + px(8), starY + px(5), Math.max(1, px(1)), 0.92);
+  drawSparkle(ctx, x + px(5), starY + px(20), Math.max(1, px(1)), 0.78);
+  drawSparkle(ctx, x + px(24), starY + px(17), Math.max(1, px(1)), 0.82);
+}
+
+function drawObstacle(ctx: CanvasRenderingContext2D, obstacle: Obstacle, worldTime: number) {
+  const x = obstacle.x;
+  const y = getAnimatedObstacleY(obstacle, worldTime);
+  if (obstacle.type === "quizStar") drawQuizStar(ctx, obstacle, worldTime);
+  else if (obstacle.type === "prefectura") drawPrefectura(ctx, x, y);
   else if (obstacle.type === "etios") drawEtios(ctx, x, y);
   else if (obstacle.type === "barrels") drawBarrels(ctx, x, y);
   else if (obstacle.type === "container") drawContainer(ctx, x, y);
@@ -837,24 +1143,105 @@ function drawRunner(ctx: CanvasRenderingContext2D, player: PlayerState, worldTim
   drawFlor(ctx, player, worldTime);
 }
 
+function drawWrappedText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number) {
+  const words = text.split(" ");
+  const lines: string[] = [];
+  let currentLine = "";
+
+  for (const word of words) {
+    const candidate = currentLine ? `${currentLine} ${word}` : word;
+    if (currentLine && ctx.measureText(candidate).width > maxWidth) {
+      lines.push(currentLine);
+      currentLine = word;
+    } else {
+      currentLine = candidate;
+    }
+  }
+
+  if (currentLine) lines.push(currentLine);
+  return lines;
+}
+
+function drawScorePopups(ctx: CanvasRenderingContext2D, state: GameState) {
+  if (!state.scorePopups.length) return;
+  const previousAlign = ctx.textAlign;
+  const previousBaseline = ctx.textBaseline;
+  const previousAlpha = ctx.globalAlpha;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.font = "bold 11px monospace";
+  for (const popup of state.scorePopups) {
+    ctx.globalAlpha = clamp(popup.life / 1150, 0, 1);
+    ctx.fillStyle = popup.color;
+    ctx.fillText(popup.text, popup.x, popup.y);
+  }
+  ctx.globalAlpha = previousAlpha;
+  ctx.textAlign = previousAlign;
+  ctx.textBaseline = previousBaseline;
+}
+
 function drawHud(ctx: CanvasRenderingContext2D, state: GameState) {
   drawRect(ctx, 8, 8, 86, 24, "rgba(255,255,255,0.75)");
+  drawRect(ctx, 114, 8, 132, 24, "rgba(255,255,255,0.75)");
   drawRect(ctx, 264, 8, 88, 24, "rgba(255,255,255,0.75)");
   ctx.fillStyle = COLORS.hud;
   ctx.font = "bold 8px monospace";
   ctx.fillText(`DIST ${String(Math.floor(state.distance)).padStart(4, "0")}`, 14, 18);
+  const formattedScore = `${state.score < 0 ? "-" : "+"}${String(Math.abs(state.score)).padStart(5, "0")}`;
+  ctx.fillText(`SCORE ${formattedScore}`, 120, 18);
   ctx.fillText(`BEST ${String(Math.floor(state.bestDistance)).padStart(4, "0")}`, 270, 18);
   ctx.font = "7px monospace";
   ctx.fillText("Jump: Space / Up", 14, 27);
+  ctx.fillText("Quiz: 1 / 2 / 3", 138, 27);
   ctx.fillText("Duck: Down", 270, 27);
 }
 
-function drawOverlay(ctx: CanvasRenderingContext2D, phase: Phase) {
+function drawQuizOverlay(ctx: CanvasRenderingContext2D, state: GameState) {
+  if (!state.activeQuiz) return;
+  const question = QUIZ_QUESTIONS[state.activeQuiz.questionIndex]!;
+  drawRect(ctx, 0, 0, W, H, "rgba(2, 6, 23, 0.72)");
+  drawRect(ctx, 28, 26, 304, 128, "rgba(15, 23, 42, 0.96)");
+  drawRect(ctx, 28, 26, 304, 8, "rgba(56, 189, 248, 0.24)");
+  drawRect(ctx, 236, 38, 78, 22, "rgba(56, 189, 248, 0.18)");
+  ctx.fillStyle = "#f8fafc";
+  ctx.font = "bold 8px monospace";
+  ctx.fillText("QUIZ STAR", 44, 44);
+  ctx.font = "bold 10px monospace";
+  ctx.fillText(`${(state.activeQuiz.remainingMs / 1000).toFixed(1)}s`, 248, 52);
+
+  ctx.font = "bold 9px monospace";
+  const lines = drawWrappedText(ctx, question.prompt, 248);
+  lines.forEach((line, index) => {
+    ctx.fillText(line, 44, 72 + index * 11);
+  });
+
+  const baseY = 92 + Math.max(0, lines.length - 1) * 10;
+  question.answers.forEach((answer, index) => {
+    const answerY = baseY + index * 18;
+    drawRect(ctx, 42, answerY - 10, 20, 13, "rgba(56, 189, 248, 0.18)");
+    ctx.font = "bold 8px monospace";
+    ctx.fillStyle = "#7dd3fc";
+    ctx.fillText(`${index + 1}`, 49, answerY - 1);
+    ctx.fillStyle = "#e2e8f0";
+    ctx.fillText(answer, 70, answerY - 1);
+  });
+
+  ctx.fillStyle = "#94a3b8";
+  ctx.font = "7px monospace";
+  ctx.fillText("Agarra la estrella, responde con 1 / 2 / 3 y segui corriendo.", 44, 146);
+}
+
+function drawOverlay(ctx: CanvasRenderingContext2D, state: GameState) {
+  if (state.phase === "quiz") {
+    drawQuizOverlay(ctx, state);
+    return;
+  }
+
   drawRect(ctx, 92, 36, 176, 44, "rgba(255,255,255,0.84)");
   ctx.fillStyle = COLORS.hud;
   ctx.textAlign = "center";
   ctx.font = "bold 10px monospace";
-  if (phase === "gameover") {
+  if (state.phase === "gameover") {
     ctx.fillText("GAME OVER", W / 2, 58);
   } else {
     ctx.fillText("RUN FLOW RUN", W / 2, 52);
@@ -883,6 +1270,8 @@ function runSelfChecks() {
   invariant(Math.abs(INITIAL_JUMP_VELOCITY / BASE_INITIAL_JUMP_VELOCITY - VERTICAL_SCALE) < 0.0001, "Jump launch must keep Dino proportions");
   invariant(Math.abs(MAX_JUMP_RISE - 36) < 0.001, "Max jump rise should preserve a clearly taller held jump while keeping Dino-like proportions");
   invariant(JSON.stringify(SUITCASE_FLYING_YPOS) === JSON.stringify([120, 105, 90]), "Flying obstacle heights should keep Dino-like proportions relative to the runner");
+  invariant(QUIZ_QUESTIONS.every((question) => question.answers.length === 3), "Each quiz question should expose exactly three answers");
+  invariant(QUIZ_QUESTIONS.every((question) => question.correctIndex >= 0 && question.correctIndex < 3), "Each quiz question must have a valid correct answer");
 }
 
 export default function UshuaiaRunnerFlorPrototype() {
@@ -897,6 +1286,7 @@ export default function UshuaiaRunnerFlorPrototype() {
   const [phase, setPhase] = useState<Phase>("ready");
   const [distance, setDistance] = useState(0);
   const [best, setBest] = useState(0);
+  const [score, setScore] = useState(0);
   const [selectedCharacter, setSelectedCharacter] = useState("flor");
 
   useEffect(() => {
@@ -920,18 +1310,62 @@ export default function UshuaiaRunnerFlorPrototype() {
     canvas.style.height = `${H * scale}px`;
   };
 
+  const resumeFromQuiz = () => {
+    const state = stateRef.current;
+    state.activeQuiz = null;
+    state.phase = "running";
+    setPhase("running");
+  };
+
+  const triggerQuiz = () => {
+    const state = stateRef.current;
+    if (state.phase !== "running") return;
+    keysRef.current.duckHeld = false;
+    state.player.ducking = false;
+    state.player.jumpHeld = false;
+    state.player.speedDrop = false;
+    if (state.nextQuizQuestionIndex >= state.quizOrder.length) {
+      state.quizOrder = createQuizOrder();
+      state.nextQuizQuestionIndex = 0;
+    }
+    const questionIndex = state.quizOrder[state.nextQuizQuestionIndex] ?? 0;
+    state.activeQuiz = {
+      questionIndex,
+      remainingMs: QUIZ_DURATION_MS,
+    };
+    state.nextQuizQuestionIndex += 1;
+    state.phase = "quiz";
+    setPhase("quiz");
+  };
+
+  const resolveQuizChoice = (choiceIndex: number) => {
+    const state = stateRef.current;
+    if (state.phase !== "quiz" || !state.activeQuiz) return;
+    const question = QUIZ_QUESTIONS[state.activeQuiz.questionIndex]!;
+    const correct = choiceIndex === question.correctIndex;
+    const delta = correct ? QUIZ_SCORE_DELTA : -QUIZ_SCORE_DELTA;
+    state.score += delta;
+    state.scorePopups.push(createScorePopup(correct ? "+5000 puntos" : "-5000 puntos", correct ? "#22c55e" : "#fb7185"));
+    setScore(state.score);
+    resumeFromQuiz();
+  };
+
   const resetGame = (startRunning = true) => {
     const bestDistance = Math.max(stateRef.current.bestDistance, stateRef.current.distance);
     stateRef.current = { ...createInitialState(), bestDistance, phase: startRunning ? "running" : "ready" };
     setBest(Math.floor(bestDistance));
     setDistance(0);
+    setScore(0);
     setPhase(startRunning ? "running" : "ready");
   };
 
   const pressJump = () => {
-    const state = stateRef.current;
-    if (state.phase === "ready") resetGame(true);
-    if (state.phase === "gameover") return;
+    let state = stateRef.current;
+    if (state.phase === "ready") {
+      resetGame(true);
+      state = stateRef.current;
+    }
+    if (state.phase === "gameover" || state.phase === "quiz") return;
     const player = state.player;
     if (player.rise <= 0.01) {
       player.vy = startJumpVelocity(state.speed);
@@ -950,14 +1384,16 @@ export default function UshuaiaRunnerFlorPrototype() {
   };
 
   const setDuck = (value: boolean) => {
-    if (stateRef.current.phase === "gameover") {
+    const state = stateRef.current;
+    if (state.phase === "gameover" || state.phase === "quiz") {
       keysRef.current.duckHeld = false;
+      state.player.ducking = false;
       return;
     }
     keysRef.current.duckHeld = value;
-    const player = stateRef.current.player;
+    const player = state.player;
     if (value && player.rise > 0) setSpeedDrop(player);
-    if (!value && stateRef.current.phase === "ready") player.ducking = false;
+    if (!value && state.phase === "ready") player.ducking = false;
   };
 
   useEffect(() => {
@@ -967,9 +1403,23 @@ export default function UshuaiaRunnerFlorPrototype() {
     if (containerRef.current) observer.observe(containerRef.current);
 
     const onKeyDown = (event: KeyboardEvent) => {
-      if (["ArrowUp", "ArrowDown", "Space", "KeyW", "KeyS"].includes(event.code)) {
+      if (["ArrowUp", "ArrowDown", "Space", "Enter", "KeyW", "KeyS", "Digit1", "Digit2", "Digit3", "Numpad1", "Numpad2", "Numpad3"].includes(event.code)) {
         event.preventDefault();
       }
+
+      if (stateRef.current.phase === "gameover") {
+        if (!event.repeat && event.code === "Enter") resetGame(true);
+        return;
+      }
+
+      if (stateRef.current.phase === "quiz") {
+        if (event.repeat) return;
+        if (event.code === "Digit1" || event.code === "Numpad1") resolveQuizChoice(0);
+        if (event.code === "Digit2" || event.code === "Numpad2") resolveQuizChoice(1);
+        if (event.code === "Digit3" || event.code === "Numpad3") resolveQuizChoice(2);
+        return;
+      }
+
       if (event.code === "ArrowUp" || event.code === "Space" || event.code === "KeyW") {
         pressJump();
       }
@@ -980,6 +1430,7 @@ export default function UshuaiaRunnerFlorPrototype() {
     };
 
     const onKeyUp = (event: KeyboardEvent) => {
+      if (stateRef.current.phase === "quiz") return;
       if (event.code === "ArrowUp" || event.code === "Space" || event.code === "KeyW") {
         releaseJump();
       }
@@ -1010,6 +1461,7 @@ export default function UshuaiaRunnerFlorPrototype() {
       const dtMs = Math.min(32, now - last || 16.67);
       const dt = dtMs / 16.67;
       last = now;
+      state.scorePopups = updateScorePopups(state.scorePopups, dtMs, dt);
 
       if (state.phase === "running") {
         state.worldTime += dtMs;
@@ -1038,7 +1490,19 @@ export default function UshuaiaRunnerFlorPrototype() {
 
         player.ducking = keysRef.current.duckHeld && player.rise === 0;
 
-        if (state.distance >= state.nextObstacleDistance) {
+        const hasQuizStarOnScreen = state.obstacles.some((obstacle) => obstacle.type === "quizStar");
+        const hasGameplayObstaclesOnScreen = state.obstacles.some((obstacle) => obstacle.type !== "quizStar");
+        const enoughRoomBeforeNextObstacle = state.nextObstacleDistance - state.distance > 42;
+        const canSpawnQuizStar =
+          !hasQuizStarOnScreen &&
+          !hasGameplayObstaclesOnScreen &&
+          enoughRoomBeforeNextObstacle &&
+          state.distance >= state.nextStarDistance;
+
+        if (canSpawnQuizStar) {
+          state.obstacles.push(createQuizStar());
+          state.nextStarDistance = getNextStarDistance(state.distance);
+        } else if (!hasQuizStarOnScreen && state.distance >= state.nextObstacleDistance) {
           const obstacle = createObstacle(state.distance);
           state.obstacles.push(obstacle);
           state.nextObstacleDistance = state.distance + getNextObstacleGap(obstacle, state.speed);
@@ -1064,7 +1528,18 @@ export default function UshuaiaRunnerFlorPrototype() {
         }
         state.particles = state.particles.filter((particle) => particle.life > 0);
 
-        if (state.obstacles.some((obstacle) => collides(player, obstacle))) {
+        const collectedStarIndex = state.obstacles.findIndex(
+          (obstacle) => obstacle.type === "quizStar" && collides(player, obstacle, state.worldTime)
+        );
+        if (collectedStarIndex >= 0) {
+          state.obstacles.splice(collectedStarIndex, 1);
+          triggerQuiz();
+        }
+
+        if (
+          state.phase === "running" &&
+          state.obstacles.some((obstacle) => obstacle.type !== "quizStar" && collides(player, obstacle, state.worldTime))
+        ) {
           state.phase = "gameover";
           player.dead = true;
           player.jumpHeld = false;
@@ -1074,6 +1549,13 @@ export default function UshuaiaRunnerFlorPrototype() {
         }
 
         setDistance(Math.floor(state.distance));
+      } else if (state.phase === "quiz") {
+        if (state.activeQuiz) {
+          state.activeQuiz.remainingMs -= dtMs;
+          if (state.activeQuiz.remainingMs <= 0) {
+            resumeFromQuiz();
+          }
+        }
       } else {
         state.worldTime += dtMs * 0.42;
         state.player.ducking = keysRef.current.duckHeld && state.phase === "ready";
@@ -1094,7 +1576,8 @@ export default function UshuaiaRunnerFlorPrototype() {
       state.particles.forEach((particle) => drawParticle(ctx, particle));
       drawRunner(ctx, state.player, state.worldTime, selectedCharacterRef.current);
       drawHud(ctx, state);
-      if (state.phase !== "running") drawOverlay(ctx, state.phase);
+      drawScorePopups(ctx, state);
+      if (state.phase !== "running") drawOverlay(ctx, state);
       rafRef.current = requestAnimationFrame(tick);
     };
 
@@ -1109,7 +1592,7 @@ export default function UshuaiaRunnerFlorPrototype() {
           <div className="hero-block">
             <h1 className="hero-title">Run Flow Run</h1>
             <p className="hero-copy">
-              Sos un agente de Delver y tenés que superar obstáculos en el muelle!
+              {"Sos un agente de Delver y ten\u00E9s que superar obst\u00E1culos en el muelle!"}
             </p>
           </div>
 
@@ -1217,6 +1700,7 @@ export default function UshuaiaRunnerFlorPrototype() {
               <li><span className="key-chip">Down</span> para agacharte o caer mas rapido</li>
               <li>Un toque corto hace un salto corto y mantenerlo llega al maximo</li>
               <li>Click en la pantalla para arrancar la corrida</li>
+              <li><span className="key-chip">1</span>, <span className="key-chip">2</span> o <span className="key-chip">3</span> para responder cuando agarres la estrella</li>
             </ul>
           </div>
         </aside>
@@ -1275,7 +1759,7 @@ export default function UshuaiaRunnerFlorPrototype() {
                         Run finished
                       </div>
                       <div style={{ marginTop: 8, fontSize: 28, fontWeight: 700, color: "#ffffff" }}>Tus stats</div>
-                      <div style={{ marginTop: 16, display: "flex", gap: 12, justifyContent: "center" }}>
+                      <div style={{ marginTop: 16, display: "flex", gap: 12, justifyContent: "center", flexWrap: "wrap" }}>
                         <div
                           style={{
                             minWidth: 92,
@@ -1289,6 +1773,20 @@ export default function UshuaiaRunnerFlorPrototype() {
                             Distancia
                           </div>
                           <div style={{ marginTop: 6, fontSize: 24, fontWeight: 700, color: "#ffffff" }}>{distance}</div>
+                        </div>
+                        <div
+                          style={{
+                            minWidth: 92,
+                            borderRadius: 16,
+                            background: "#1e293b",
+                            padding: "12px 14px",
+                            color: "#e2e8f0",
+                          }}
+                        >
+                          <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.08em", color: "#94a3b8" }}>
+                            Puntos
+                          </div>
+                          <div style={{ marginTop: 6, fontSize: 24, fontWeight: 700, color: "#ffffff" }}>{score}</div>
                         </div>
                         <div
                           style={{
@@ -1329,7 +1827,7 @@ export default function UshuaiaRunnerFlorPrototype() {
               </div>
             </div>
 
-            {phase !== "gameover" && (
+            {(phase === "running" || phase === "ready") && (
               <div className="action-bar">
                 <button
                 onMouseDown={pressJump}
@@ -1371,4 +1869,3 @@ export default function UshuaiaRunnerFlorPrototype() {
     </div>
   );
 }
-
