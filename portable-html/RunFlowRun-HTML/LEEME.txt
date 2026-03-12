@@ -1,0 +1,9 @@
+﻿Run Flow Run - version portable HTML
+
+Opciones para abrirlo:
+1. Doble click en run-local.bat
+2. O en PowerShell:
+   powershell -ExecutionPolicy Bypass -File .\run-local.ps1 -OpenBrowser
+
+El juego se sirve localmente en:
+http://localhost:4173

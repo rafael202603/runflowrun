@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
+import runFlowRunIcon from "./assets/rfr.png";
 
 type ObstacleType = "etios" | "prefectura" | "barrels" | "forklift" | "container" | "suitcase" | "ypfTruck" | "quizStar";
 type Phase = "ready" | "running" | "quiz" | "gameover";
@@ -32,6 +33,8 @@ type Particle = {
   vy: number;
   life: number;
   size: number;
+  color?: string;
+  gravity?: number;
 };
 
 type ScorePopup = {
@@ -54,6 +57,17 @@ type ActiveQuiz = {
   remainingMs: number;
 };
 
+type QuizOutcome = "correct" | "incorrect" | "timeout";
+
+type QuizFeedback = {
+  title: string;
+  pointsText: string;
+  color: string;
+  glow: string;
+  life: number;
+  totalLife: number;
+};
+
 type GameState = {
   phase: Phase;
   speed: number;
@@ -70,6 +84,7 @@ type GameState = {
   quizOrder: number[];
   nextQuizQuestionIndex: number;
   scorePopups: ScorePopup[];
+  quizFeedback: QuizFeedback | null;
 };
 
 const W = 360;
@@ -98,7 +113,11 @@ const PLAYER_DUCK_HEIGHT = 20;
 const QUIZ_STAR_SIZE = 32;
 const QUIZ_DURATION_MS = 10000;
 const QUIZ_SCORE_DELTA = 5000;
+const QUIZ_WRONG_SCORE_DELTA = 2500;
+const QUIZ_TIMEOUT_SCORE_DELTA = 5000;
+const QUIZ_FEEDBACK_DURATION_MS = 950;
 const QUIZ_STAR_YPOS = [GROUND_Y - 84, GROUND_Y - 66, GROUND_Y - 48] as const;
+const QUIZ_CONFETTI_COLORS = ["#fde047", "#22c55e", "#38bdf8", "#f97316", "#f472b6"] as const;
 
 // Dino uses smaller effective speed on narrower screens.
 const HORIZONTAL_SPEED_SCALE = (W / DINO_DEFAULT_WIDTH) * 1.2;
@@ -196,154 +215,129 @@ const CHARACTERS = [
 
 const QUIZ_QUESTIONS: QuizQuestion[] = [
   {
-    prompt: "\xbfCon cu\xe1ntos vessels distintos trabaj\xf3 Delver esta temporada 25-26? (Ops)",
+    prompt: "¿Con cuántos vessels distintos trabajó Delver esta temporada 25-26? (Ops)",
     answers: ["24", "29", "32"] as [string, string, string],
     correctIndex: 0,
   },
   {
-    prompt: "Al cierre de temporada 25-26, \xbfcu\xe1ntas recaladas atendimos entre Ops + Shipments + Suppliers?",
+    prompt: "Al cierre de temporada 25-26, ¿cuántas recaladas atendimos entre todos los deptos?",
     answers: ["295", "311", "325"] as [string, string, string],
     correctIndex: 1,
   },
   {
-    prompt: "\xbfCu\xe1ntas personas forman hoy el equipo Delver?",
-    answers: ["75", "83", "78"] as [string, string, string],
+    prompt: "¿Cuántas personas forman hoy el equipo Delver?",
+    answers: ["61", "83", "78"] as [string, string, string],
     correctIndex: 1,
   },
   {
-    prompt: "\xbfQu\xe9 participaci\xf3n del mercado ant\xe1rtico agenciamos hoy?",
+    prompt: "Del total de Expediciones Antárticas desde Ushuaia, ¿Qué porcentaje agencia Delver?",
     answers: ["38%", "entre 40% y 50%", "62%"] as [string, string, string],
     correctIndex: 1,
   },
   {
-    prompt: "\xbfCu\xe1ntos contenedores entregamos esta temporada?",
-    answers: ["179", "195", "253"] as [string, string, string],
+    prompt: "¿Cuántos contenedores entregamos esta temporada?",
+    answers: ["179", "99", "253"] as [string, string, string],
     correctIndex: 0,
   },
   {
-    prompt: "\xbfCu\xe1ntas AVE visas emiti\xf3 Crewing esta temporada?",
-    answers: ["148", "173", "196"] as [string, string, string],
-    correctIndex: 1,
-  },
-  {
-    prompt: "Si sum\xe1ramos pasajeros + crew de todos los barcos a los que abastecimos con Suppliers, \xbfde cu\xe1ntas personas estamos hablando?",
-    answers: ["entre 5.000 y 5.500", "entre 9.000 y 9.200", "m\xe1s de 10 mil personas"] as [string, string, string],
+    prompt: "¿Cuántas AVE visas emitió Crewing esta temporada?",
+    answers: ["653", "1897", "493"] as [string, string, string],
     correctIndex: 2,
   },
   {
-    prompt: "\xbfCu\xe1l es el total de crew que hicieron ON/OFF con nosotros esta temporada?",
-    answers: ["1.180", "1.340", "1.520"] as [string, string, string],
+    prompt: "¿Cuál es el total de personas (paxs + crew) embarcadas en la flota que atiende Delver?",
+    answers: ["5896", "9022", "más de 10 mil personas"] as [string, string, string],
+    correctIndex: 2,
+  },
+  {
+    prompt: "¿Cuántos tripulantes movió crew en la temporada 24-25?",
+    answers: ["1256", "5942", "8962"] as [string, string, string],
     correctIndex: 1,
   },
   {
-    prompt: "Seg\xfan las encuestas enviadas, \xbfqu\xe9 porcentaje de satisfacci\xf3n se logr\xf3 esta temporada?",
-    answers: ["91%", "94%", "97%"] as [string, string, string],
+    prompt: "¿Cuántas carpetas de stock (carga + descarga)  se crearon esta temporada?",
+    answers: ["176", "380", "240"] as [string, string, string],
+    correctIndex: 0,
+  },
+  {
+    prompt: "¿Cuántas horas camión tuvo Shipments esta temporada?",
+    answers: ["2845", "6482", "886"] as [string, string, string],
+    correctIndex: 0,
+  },
+  {
+    prompt: "¿Cuántas turnos de estiba se contrataron esta temporada?",
+    answers: ["365", "556", "129"] as [string, string, string],
+    correctIndex: 0,
+  },
+  {
+    prompt: "¿Cuántos litros de nafta fueron registrados por FUEL ORDERS esta temporada?",
+    answers: ["94500", "21240", "65800"] as [string, string, string],
+    correctIndex: 0,
+  },
+  {
+    prompt: "¿Cuántos drums de nafta se entregaron esta temporada? Segun FUEL ORDERS",
+    answers: ["1389", "474", "267"] as [string, string, string],
     correctIndex: 1,
   },
   {
-    prompt: "\xbfCu\xe1ntas carpetas de stock (carga + descarga) se generaron esta temporada?",
-    answers: ["108", "126", "142"] as [string, string, string],
-    correctIndex: 1,
-  },
-  {
-    prompt: "\xbfCu\xe1ntas horas cami\xf3n se contrataron por Shipments esta temporada?",
-    answers: ["410", "465", "520"] as [string, string, string],
-    correctIndex: 1,
-  },
-  {
-    prompt: "\xbfCu\xe1ntas manos de estiba se contrataron esta temporada?",
-    answers: ["690", "780", "845"] as [string, string, string],
-    correctIndex: 1,
-  },
-  {
-    prompt: "\xbfCu\xe1ntos litros de nafta se vendieron esta temporada?",
-    answers: ["92", "108", "121"] as [string, string, string],
-    correctIndex: 1,
-  },
-  {
-    prompt: "\xbfCu\xe1ntos drums de nafta se entregaron esta temporada?",
-    answers: ["179", "195", "253"] as [string, string, string],
-    correctIndex: 1,
-  },
-  {
-    prompt: "\xbfCu\xe1l fue la mediana de d\xedas de demora de facturaci\xf3n desde el ETD esta temporada?",
+    prompt: "¿Cuál es la mediana en días de facturación de esta temporada?",
     answers: ["52", "39", "31"] as [string, string, string],
     correctIndex: 2,
   },
   {
-    prompt: "\xbfCu\xe1l fue la mediana de d\xedas de demora de facturaci\xf3n la temporada pasada 24-25?",
-    answers: ["54", "67", "59"] as [string, string, string],
-    correctIndex: 2,
-  },
-  {
-    prompt: "\xbfCu\xe1ntos veh\xedculos componen hoy la flota Delver?",
-    answers: ["18", "21", "24"] as [string, string, string],
-    correctIndex: 1,
-  },
-  {
-    prompt: "Al 06/03/2026, \xbfcu\xe1ntas recaladas llevaba ejecutadas la temporada?",
-    answers: ["293", "305", "342"] as [string, string, string],
+    prompt: "¿Cuál es la mediana en días de facturación de la temporada pasada 24-25?",
+    answers: ["53", "67", "59"] as [string, string, string],
     correctIndex: 0,
   },
   {
-    prompt: "Al 06/03/2026, \xbfcu\xe1ntas recaladas estaban proyectadas para toda la temporada?",
-    answers: ["325", "342", "356"] as [string, string, string],
+    prompt: "¿Cuántos vehículos componen hoy la flota Delver?",
+    answers: ["9", "16", "24"] as [string, string, string],
     correctIndex: 1,
   },
   {
-    prompt: "Al 06/03/2026, \xbfcu\xe1ntos documentos hab\xeda procesado One Flow?",
-    answers: ["5.480", "6.930", "7.520"] as [string, string, string],
-    correctIndex: 1,
+    prompt: "¿Cuántos documentos lleva procesado One Flow?",
+    answers: ["2451", "6935", "más de 8 mil"] as [string, string, string],
+    correctIndex: 2,
   },
   {
-    prompt: "Al 06/03/2026, \xbfqu\xe9 porcentaje aproximado de la temporada ya estaba ejecutado?",
-    answers: ["79%", "86%", "91%"] as [string, string, string],
-    correctIndex: 1,
-  },
-  {
-    prompt: "Al 06/03/2026, \xbfcu\xe1ntas recaladas quedaban pendientes para completar la temporada proyectada?",
-    answers: ["39", "49", "59"] as [string, string, string],
-    correctIndex: 1,
-  },
-  {
-    prompt: "En promedio, al corte del 06/03, \xbfcu\xe1ntos documentos se hab\xedan procesado por recalada?",
-    answers: ["18", "24", "31"] as [string, string, string],
-    correctIndex: 1,
-  },
-  {
-    prompt: "\xbfQu\xe9 significa ZDR?",
+    prompt: "¿Qué significa el reporte ZDR para One Flow?",
     answers: ["Zone Dispatch Review", "Zero Discrepancy Report", "Zonal Delay Registry"] as [string, string, string],
     correctIndex: 1,
   },
   {
-    prompt: "\xbfA cu\xe1ntos d\xedas del ETD se emite el ZDR REPORT?",
-    answers: ["14 d\xedas", "21 d\xedas", "30 d\xedas"] as [string, string, string],
+    prompt: "¿A cuántos días del ETD se emite el ZDR REPORT?",
+    answers: ["14 días", "21 días", "30 días"] as [string, string, string],
     correctIndex: 1,
   },
   {
-    prompt: "\xbfCu\xe1l es el mes con m\xe1s recaladas concurrentes?",
+    prompt: "¿A cuántos días del ETD se emite el GAP REPORT?",
+    answers: ["7 días", "14 días", "21 días"] as [string, string, string],
+    correctIndex: 0,
+  },
+  {
+    prompt: "¿Cuál es el mes de la temporada con más recaladas concurrentes?",
     answers: ["Diciembre", "Enero", "Febrero"] as [string, string, string],
     correctIndex: 1,
   },
   {
-    prompt: "Del total del mercado ant\xe1rtico mundial, \xbfqu\xe9 porcentaje aproximado tiene a Ushuaia como puerto de salida-llegada?",
+    prompt: "Del total del Mercado Antártico Mundial, ¿qué porcentaje aprox tiene Ushuaia como puerto?",
     answers: ["71%", "78%", "86%"] as [string, string, string],
     correctIndex: 2,
   },
   {
-    prompt: "\xbfCu\xe1ntas noches de hotel gestion\xf3 Crewing esta temporada?",
-    answers: ["420", "560", "730"] as [string, string, string],
-    correctIndex: 1,
+    prompt: "¿Cuántas noches de hotel gestionó Crewing en la temporada 25-26?",
+    answers: ["4710", "2920", "5620"] as [string, string, string],
+    correctIndex: 0,
   },
   {
-    prompt: "\xbfCu\xe1l fue el buque al que se le emiti\xf3 la factura m\xe1s grande en US$?",
-    answers: ["Ocean Victory", "Fridtjof Nansen", "Roald Amundsen"] as [string, string, string],
-    correctIndex: 1,
+    prompt: "¿Cuál es el buque que tuvo mayor volumen de facturación?",
+    answers: ["Scenic Eclipse", "Fridtjof Nansen", "Roald Amundsen"] as [string, string, string],
+    correctIndex: 0,
   },
   {
-    prompt: "\xbfCu\xe1ntos servicios promedio tuvo una recalada con Delver?",
-    answers: ["1,4", "1,8", "2,3"] as [string, string, string],
-    correctIndex: 1,
+    prompt: "¿Cuántos servicios promedio solicita un buque en una recalada?",
+    answers: ["44", "18", "32"] as [string, string, string],
+    correctIndex: 0,
   },
 ];
 
@@ -389,6 +383,7 @@ function createInitialState(): GameState {
     quizOrder: createQuizOrder(),
     nextQuizQuestionIndex: 0,
     scorePopups: [],
+    quizFeedback: null,
   };
 }
 
@@ -560,6 +555,72 @@ function makeParticle(x: number, y: number): Particle {
     life: 230 + Math.random() * 160,
     size: 1 + Math.floor(Math.random() * 2),
   };
+}
+
+function makeConfettiParticle(x: number, y: number, color: string): Particle {
+  return {
+    x,
+    y,
+    vx: (Math.random() - 0.5) * 2.8,
+    vy: -(1.8 + Math.random() * 1.7),
+    life: 420 + Math.random() * 220,
+    size: 2 + Math.floor(Math.random() * 2),
+    color,
+    gravity: 0.16,
+  };
+}
+
+function createQuizFeedback(outcome: QuizOutcome): QuizFeedback {
+  if (outcome === "correct") {
+    return {
+      title: "CORRECTO!",
+      pointsText: "+5000 puntos",
+      color: "#22c55e",
+      glow: "rgba(34, 197, 94, 0.35)",
+      life: QUIZ_FEEDBACK_DURATION_MS,
+      totalLife: QUIZ_FEEDBACK_DURATION_MS,
+    };
+  }
+
+  if (outcome === "incorrect") {
+    return {
+      title: "INCORRECTO",
+      pointsText: "-2500 puntos",
+      color: "#fb7185",
+      glow: "rgba(251, 113, 133, 0.34)",
+      life: QUIZ_FEEDBACK_DURATION_MS,
+      totalLife: QUIZ_FEEDBACK_DURATION_MS,
+    };
+  }
+
+  return {
+    title: "TIEMPO!",
+    pointsText: "-5000 puntos",
+    color: "#f97316",
+    glow: "rgba(249, 115, 22, 0.34)",
+    life: QUIZ_FEEDBACK_DURATION_MS,
+    totalLife: QUIZ_FEEDBACK_DURATION_MS,
+  };
+}
+
+function updateQuizFeedback(quizFeedback: QuizFeedback | null, elapsedMs: number) {
+  if (!quizFeedback) return null;
+  quizFeedback.life -= elapsedMs;
+  return quizFeedback.life > 0 ? quizFeedback : null;
+}
+
+function launchQuizConfetti(state: GameState, title: string) {
+  const letterWidth = 7;
+  const startX = W / 2 - (title.length * letterWidth) / 2;
+  const baseY = 54;
+
+  for (let index = 0; index < title.length; index += 1) {
+    const char = title[index];
+    if (!char || char === " ") continue;
+    const x = startX + index * letterWidth + letterWidth / 2;
+    state.particles.push(makeConfettiParticle(x - 1, baseY, pick([...QUIZ_CONFETTI_COLORS])));
+    state.particles.push(makeConfettiParticle(x + 1, baseY - 1, pick([...QUIZ_CONFETTI_COLORS])));
+  }
 }
 
 function startJumpVelocity(speed: number): number {
@@ -933,7 +994,7 @@ function drawObstacle(ctx: CanvasRenderingContext2D, obstacle: Obstacle, worldTi
 }
 
 function drawParticle(ctx: CanvasRenderingContext2D, particle: Particle) {
-  drawRect(ctx, particle.x, particle.y, particle.size, particle.size, COLORS.pierShade);
+  drawRect(ctx, particle.x, particle.y, particle.size, particle.size, particle.color ?? COLORS.pierShade);
 }
 
 function getRunnerPhase(player: PlayerState, worldTime: number) {
@@ -1180,6 +1241,36 @@ function drawScorePopups(ctx: CanvasRenderingContext2D, state: GameState) {
   ctx.textBaseline = previousBaseline;
 }
 
+function drawQuizFeedback(ctx: CanvasRenderingContext2D, state: GameState) {
+  if (!state.quizFeedback) return;
+
+  const feedback = state.quizFeedback;
+  const previousAlign = ctx.textAlign;
+  const previousBaseline = ctx.textBaseline;
+  const previousAlpha = ctx.globalAlpha;
+  const progress = 1 - feedback.life / feedback.totalLife;
+  const fadeIn = clamp(progress / 0.16, 0, 1);
+  const fadeOut = clamp(feedback.life / (feedback.totalLife * 0.42), 0, 1);
+  const alpha = Math.min(fadeIn, fadeOut);
+  const y = 48 - progress * 6;
+  const width = Math.max(152, feedback.title.length * 8 + 34);
+  const left = (W - width) / 2;
+
+  ctx.globalAlpha = alpha;
+  drawRect(ctx, left, y - 18, width, 36, "rgba(15, 23, 42, 0.88)");
+  drawRect(ctx, left, y - 18, width, 5, feedback.glow);
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = feedback.color;
+  ctx.font = "bold 13px monospace";
+  ctx.fillText(feedback.title, W / 2, y - 2);
+  ctx.font = "bold 8px monospace";
+  ctx.fillText(feedback.pointsText, W / 2, y + 10);
+  ctx.globalAlpha = previousAlpha;
+  ctx.textAlign = previousAlign;
+  ctx.textBaseline = previousBaseline;
+}
+
 function drawHud(ctx: CanvasRenderingContext2D, state: GameState) {
   drawRect(ctx, 8, 8, 86, 24, "rgba(255,255,255,0.75)");
   drawRect(ctx, 114, 8, 132, 24, "rgba(255,255,255,0.75)");
@@ -1237,12 +1328,12 @@ function drawOverlay(ctx: CanvasRenderingContext2D, state: GameState) {
     return;
   }
 
-  drawRect(ctx, 92, 36, 176, 44, "rgba(255,255,255,0.84)");
+  drawRect(ctx, 80, 22, 200, 96, "rgba(255,255,255,0.84)");
   ctx.fillStyle = COLORS.hud;
   ctx.textAlign = "center";
   ctx.font = "bold 10px monospace";
   if (state.phase === "gameover") {
-    ctx.fillText("GAME OVER", W / 2, 58);
+    ctx.fillText("GAME OVER", W / 2, 56);
   } else {
     ctx.fillText("RUN FLOW RUN", W / 2, 52);
     ctx.font = "7px monospace";
@@ -1338,16 +1429,27 @@ export default function UshuaiaRunnerFlorPrototype() {
     setPhase("quiz");
   };
 
+  const resolveQuizOutcome = (outcome: QuizOutcome) => {
+    const state = stateRef.current;
+    if (state.phase !== "quiz" || !state.activeQuiz) return;
+    const delta =
+      outcome === "correct"
+        ? QUIZ_SCORE_DELTA
+        : outcome === "incorrect"
+          ? -QUIZ_WRONG_SCORE_DELTA
+          : -QUIZ_TIMEOUT_SCORE_DELTA;
+    state.score += delta;
+    state.quizFeedback = createQuizFeedback(outcome);
+    if (outcome === "correct") launchQuizConfetti(state, state.quizFeedback.title);
+    setScore(state.score);
+    resumeFromQuiz();
+  };
+
   const resolveQuizChoice = (choiceIndex: number) => {
     const state = stateRef.current;
     if (state.phase !== "quiz" || !state.activeQuiz) return;
     const question = QUIZ_QUESTIONS[state.activeQuiz.questionIndex]!;
-    const correct = choiceIndex === question.correctIndex;
-    const delta = correct ? QUIZ_SCORE_DELTA : -QUIZ_SCORE_DELTA;
-    state.score += delta;
-    state.scorePopups.push(createScorePopup(correct ? "+5000 puntos" : "-5000 puntos", correct ? "#22c55e" : "#fb7185"));
-    setScore(state.score);
-    resumeFromQuiz();
+    resolveQuizOutcome(choiceIndex === question.correctIndex ? "correct" : "incorrect");
   };
 
   const resetGame = (startRunning = true) => {
@@ -1462,6 +1564,7 @@ export default function UshuaiaRunnerFlorPrototype() {
       const dt = dtMs / 16.67;
       last = now;
       state.scorePopups = updateScorePopups(state.scorePopups, dtMs, dt);
+      state.quizFeedback = updateQuizFeedback(state.quizFeedback, dtMs);
 
       if (state.phase === "running") {
         state.worldTime += dtMs;
@@ -1524,6 +1627,7 @@ export default function UshuaiaRunnerFlorPrototype() {
         for (const particle of state.particles) {
           particle.x += particle.vx * dt;
           particle.y += particle.vy * dt;
+          particle.vy += (particle.gravity ?? 0) * dt;
           particle.life -= dtMs;
         }
         state.particles = state.particles.filter((particle) => particle.life > 0);
@@ -1553,7 +1657,7 @@ export default function UshuaiaRunnerFlorPrototype() {
         if (state.activeQuiz) {
           state.activeQuiz.remainingMs -= dtMs;
           if (state.activeQuiz.remainingMs <= 0) {
-            resumeFromQuiz();
+            resolveQuizOutcome("timeout");
           }
         }
       } else {
@@ -1578,6 +1682,7 @@ export default function UshuaiaRunnerFlorPrototype() {
       drawHud(ctx, state);
       drawScorePopups(ctx, state);
       if (state.phase !== "running") drawOverlay(ctx, state);
+      drawQuizFeedback(ctx, state);
       rafRef.current = requestAnimationFrame(tick);
     };
 
@@ -1590,7 +1695,7 @@ export default function UshuaiaRunnerFlorPrototype() {
       <div className="app-layout">
         <aside className="sidebar-panel">
           <div className="hero-block">
-            <h1 className="hero-title">Run Flow Run</h1>
+            <img className="hero-logo" src={runFlowRunIcon} alt="Run Flow Run" />
             <p className="hero-copy">
               {"Sos un agente de Delver y ten\u00E9s que superar obst\u00E1culos en el muelle!"}
             </p>
