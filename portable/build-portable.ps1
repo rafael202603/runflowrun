@@ -9,6 +9,8 @@ $source = Join-Path $PSScriptRoot "RunFlowRunPortable.cs"
 $output = [System.IO.Path]::GetFullPath((Join-Path $root $OutputPath))
 $outputDir = Split-Path -Parent $output
 $distDir = Join-Path $root "dist"
+$iconScript = Join-Path $PSScriptRoot "build-icon.ps1"
+$iconPath = Join-Path $PSScriptRoot "RunFlowRunPortable.ico"
 $csc = "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
 
 if (-not (Test-Path $csc)) {
@@ -26,6 +28,11 @@ try {
     throw "No existe la carpeta dist"
   }
 
+  & powershell -ExecutionPolicy Bypass -File $iconScript
+  if ($LASTEXITCODE -ne 0) {
+    throw "Fallo la generacion del icono portable"
+  }
+
   New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
   if (Test-Path $output) {
     Remove-Item $output -Force
@@ -38,7 +45,7 @@ try {
     $resourceArgs += "/resource:`"$($_.FullName)`",$relative"
   }
 
-  & $csc /nologo /target:exe /optimize+ /out:$output $source @resourceArgs
+  & $csc /nologo /target:exe /optimize+ /win32icon:$iconPath /out:$output $source @resourceArgs
   if ($LASTEXITCODE -ne 0) {
     throw "Fallo la compilacion portable"
   }
