@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import runFlowRunIcon from "./assets/rfr.png";
+import { fetchTopLeaderboard, submitBestLeaderboardScore, type LeaderboardRow } from "./lib/leaderboard";
 
 type ObstacleType = "etios" | "prefectura" | "barrels" | "forklift" | "container" | "suitcase" | "ypfTruck" | "quizStar";
 type Phase = "ready" | "running" | "quiz" | "gameover";
@@ -211,7 +212,15 @@ const CHARACTERS = [
   { id: "lucas", name: "Lucas", status: "available" },
   { id: "nico", name: "Nico C", status: "available" },
   { id: "josefina", name: "Josefina", status: "available" },
+  { id: "jime", name: "Jime", status: "available" },
+  { id: "santi", name: "Santi", status: "available" },
+  { id: "pablo", name: "Pablo", status: "available" },
+  { id: "eli", name: "Eli", status: "available" },
+  { id: "vero", name: "Vero", status: "available" },
+  { id: "chino", name: "Chino", status: "available" },
+  { id: "ger", name: "Ger", status: "available" },
 ] as const;
+const NICKNAME_STORAGE_KEY = "runflowrun.nickname";
 
 const QUIZ_QUESTIONS: QuizQuestion[] = [
   {
@@ -343,6 +352,10 @@ const QUIZ_QUESTIONS: QuizQuestion[] = [
 
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 const pick = <T,>(items: T[]): T => items[Math.floor(Math.random() * items.length)];
+
+function getCharacterName(characterId: string) {
+  return CHARACTERS.find((character) => character.id === characterId)?.name ?? characterId;
+}
 
 function createQuizOrder() {
   const order = QUIZ_QUESTIONS.map((_, index) => index);
@@ -1089,27 +1102,28 @@ function drawLucas(ctx: CanvasRenderingContext2D, player: PlayerState, worldTime
   const hair2 = "#b3b8bf";
   const hair3 = "#60656c";
   const beard = "#7b6550";
+  const eyeBlue = "#4166d5";
 
   if (phase === "run-0") {
     p(2,2,2,1,hair2); p(4,1,5,1,hair); p(9,2,2,1,hair2); p(3,2,7,1,hair3); p(2,3,9,1,hair3); p(2,4,9,4,hair);
-    p(3,4,7,5,skin); p(2,5,1,2,skin); p(10,5,1,2,skin); p(4,5,2,1,COLORS.white); p(7,5,2,1,COLORS.white); p(5,6,1,blink ? 1 : 2,COLORS.ink); p(8,6,1,blink ? 1 : 2,COLORS.ink); p(4,8,5,2,beard); p(6,7,1,1,skinShade); p(6,9,2,1,"#b87978");
+    p(3,4,7,5,skin); p(2,5,1,2,skin); p(10,5,1,2,skin); p(4,5,2,1,COLORS.white); p(7,5,2,1,COLORS.white); p(5,6,1,blink ? 1 : 2,eyeBlue); p(8,6,1,blink ? 1 : 2,eyeBlue); p(4,8,5,2,beard); p(6,7,1,1,skinShade); p(6,9,2,1,"#b87978");
     p(3,10,10,5,COLORS.shirt); p(4,10,1,1,COLORS.white); p(8,11,1,3,COLORS.white); p(6,12,4,1,COLORS.white); p(2,11,2,4,skin); p(11,11,2,4,skin); p(3,15,10,2,COLORS.shirt2);
     p(4,15,2,6,COLORS.pants); p(7,15,2,4,COLORS.pants); p(8,19,2,4,COLORS.pants); p(2,17,2,3,COLORS.pants); p(2,20,4,2,COLORS.shoe); p(7,22,4,2,COLORS.shoe); p(1,22,2,1,COLORS.shoeDark); p(9,23,2,1,COLORS.shoeDark); p(5,17,1,4,COLORS.pants2); p(7,18,1,5,COLORS.pants2);
   } else if (phase === "run-1") {
     p(2,2,2,1,hair2); p(4,1,5,1,hair); p(9,2,2,1,hair2); p(3,2,7,1,hair3); p(2,3,9,1,hair3); p(2,4,9,4,hair);
-    p(3,4,7,5,skin); p(2,5,1,2,skin); p(10,5,1,2,skin); p(4,5,2,1,COLORS.white); p(7,5,2,1,COLORS.white); p(5,6,1,blink ? 1 : 2,COLORS.ink); p(8,6,1,blink ? 1 : 2,COLORS.ink); p(4,8,5,2,beard); p(6,7,1,1,skinShade); p(6,9,2,1,"#b87978");
+    p(3,4,7,5,skin); p(2,5,1,2,skin); p(10,5,1,2,skin); p(4,5,2,1,COLORS.white); p(7,5,2,1,COLORS.white); p(5,6,1,blink ? 1 : 2,eyeBlue); p(8,6,1,blink ? 1 : 2,eyeBlue); p(4,8,5,2,beard); p(6,7,1,1,skinShade); p(6,9,2,1,"#b87978");
     p(3,10,10,5,COLORS.shirt); p(4,10,1,1,COLORS.white); p(8,11,1,3,COLORS.white); p(6,12,4,1,COLORS.white); p(1,12,2,4,skin); p(11,10,2,4,skin); p(3,15,10,2,COLORS.shirt2);
     p(7,15,2,6,COLORS.pants); p(4,15,2,4,COLORS.pants); p(3,19,2,4,COLORS.pants); p(8,17,2,3,COLORS.pants); p(2,22,4,2,COLORS.shoe); p(7,20,4,2,COLORS.shoe); p(2,23,2,1,COLORS.shoeDark); p(9,21,2,1,COLORS.shoeDark); p(7,17,1,4,COLORS.pants2); p(4,18,1,5,COLORS.pants2);
   } else if (phase === "jump") {
     p(2,2,2,1,hair2); p(4,1,5,1,hair); p(9,2,2,1,hair2); p(3,2,7,1,hair3); p(2,3,9,1,hair3); p(2,4,9,4,hair);
-    p(3,4,7,5,skin); p(2,5,1,2,skin); p(10,5,1,2,skin); p(4,5,2,1,COLORS.white); p(7,5,2,1,COLORS.white); p(5,6,1,blink ? 1 : 2,COLORS.ink); p(8,6,1,blink ? 1 : 2,COLORS.ink); p(4,8,5,2,beard); p(6,7,1,1,skinShade); p(6,9,2,1,"#b87978");
+    p(3,4,7,5,skin); p(2,5,1,2,skin); p(10,5,1,2,skin); p(4,5,2,1,COLORS.white); p(7,5,2,1,COLORS.white); p(5,6,1,blink ? 1 : 2,eyeBlue); p(8,6,1,blink ? 1 : 2,eyeBlue); p(4,8,5,2,beard); p(6,7,1,1,skinShade); p(6,9,2,1,"#b87978");
     p(3,10,10,5,COLORS.shirt); p(4,10,1,1,COLORS.white); p(8,11,1,3,COLORS.white); p(6,12,4,1,COLORS.white); p(1,11,2,4,skin); p(11,11,2,4,skin); p(3,15,10,2,COLORS.shirt2);
     p(4,16,2,4,COLORS.pants); p(7,16,2,4,COLORS.pants); p(3,18,3,2,COLORS.pants2); p(7,18,3,2,COLORS.pants2); p(2,20,4,2,COLORS.shoe); p(7,20,4,2,COLORS.shoe); p(2,21,2,1,COLORS.shoeDark); p(9,21,2,1,COLORS.shoeDark);
   } else if (phase === "duck-0") {
-    p(3,5,7,1,hair3); p(2,6,9,1,hair3); p(2,7,9,4,hair); p(3,7,2,1,hair2); p(8,7,2,1,hair2); p(3,7,7,4,skin); p(4,8,2,1,COLORS.white); p(7,8,2,1,COLORS.white); p(5,9,1,1,COLORS.ink); p(8,9,1,1,COLORS.ink); p(5,10,4,2,beard); p(6,10,1,1,skinShade);
+    p(3,5,7,1,hair3); p(2,6,9,1,hair3); p(2,7,9,4,hair); p(3,7,2,1,hair2); p(8,7,2,1,hair2); p(3,7,7,4,skin); p(4,8,2,1,COLORS.white); p(7,8,2,1,COLORS.white); p(5,9,1,1,eyeBlue); p(8,9,1,1,eyeBlue); p(5,10,4,2,beard); p(6,10,1,1,skinShade);
     p(5,12,12,3,COLORS.shirt); p(7,12,1,1,COLORS.white); p(10,12,1,2,COLORS.white); p(9,13,4,1,COLORS.white); p(2,13,3,2,skin); p(14,13,3,2,skin); p(7,15,10,2,COLORS.pants); p(4,16,6,2,COLORS.shoe); p(12,16,6,2,COLORS.shoe); p(4,17,2,1,COLORS.shoeDark); p(16,17,2,1,COLORS.shoeDark);
   } else {
-    p(3,5,7,1,hair3); p(2,6,9,1,hair3); p(2,7,9,4,hair); p(3,7,2,1,hair2); p(8,7,2,1,hair2); p(3,7,7,4,skin); p(4,8,2,1,COLORS.white); p(7,8,2,1,COLORS.white); p(5,9,1,1,COLORS.ink); p(8,9,1,1,COLORS.ink); p(5,10,4,2,beard); p(6,10,1,1,skinShade);
+    p(3,5,7,1,hair3); p(2,6,9,1,hair3); p(2,7,9,4,hair); p(3,7,2,1,hair2); p(8,7,2,1,hair2); p(3,7,7,4,skin); p(4,8,2,1,COLORS.white); p(7,8,2,1,COLORS.white); p(5,9,1,1,eyeBlue); p(8,9,1,1,eyeBlue); p(5,10,4,2,beard); p(6,10,1,1,skinShade);
     p(5,12,12,3,COLORS.shirt); p(7,12,1,1,COLORS.white); p(10,12,1,2,COLORS.white); p(9,13,4,1,COLORS.white); p(1,13,3,2,skin); p(14,12,3,2,skin); p(7,15,10,2,COLORS.pants); p(5,16,6,2,COLORS.shoe); p(12,15,6,2,COLORS.shoe); p(5,17,2,1,COLORS.shoeDark); p(16,16,2,1,COLORS.shoeDark);
   }
 }
@@ -1164,23 +1178,323 @@ function drawJosefina(ctx: CanvasRenderingContext2D, player: PlayerState, worldT
   const hairGold = "#d8a76a";
   const hairShadow = "#8b4f30";
   const cheek = "#e6a88f";
+  const eyeBlue = "#4166d5";
 
   if (phase === "run-0") {
     p(1,1,2,1,hairGold); p(2,1,3,2,hairGold); p(8,1,3,2,hairGold); p(10,2,2,1,hairGold); p(11,1,1,1,hairGold); p(0,4,3,2,hairCopper); p(10,4,3,2,hairCopper); p(1,6,2,4,hairCopper); p(10,6,2,4,hairCopper); p(3,1,8,1,hairCopper); p(2,2,10,1,hairCopper); p(1,3,12,7,hairShadow);
-    p(2,4,10,4,hairCopper); p(3,4,8,5,COLORS.skin); p(4,3,7,2,hairGold); p(3,6,2,2,COLORS.skin); p(9,6,2,2,COLORS.skin); p(4,5,3,2,COLORS.white); p(8,5,3,2,COLORS.white); p(7,5,1,1,COLORS.white); p(5,6,1,blink ? 1 : 2,COLORS.ink); p(9,6,1,blink ? 1 : 2,COLORS.ink); p(6,8,1,1,COLORS.skinShade); p(5,8,5,1,cheek); p(7,9,2,1,"#bf7b70");
+    p(2,4,10,4,hairCopper); p(3,4,8,5,COLORS.skin); p(4,3,7,2,hairGold); p(3,6,2,2,COLORS.skin); p(9,6,2,2,COLORS.skin); p(4,5,3,2,COLORS.white); p(8,5,3,2,COLORS.white); p(7,5,1,1,COLORS.white); p(5,6,1,blink ? 1 : 2,eyeBlue); p(9,6,1,blink ? 1 : 2,eyeBlue); p(6,8,1,1,COLORS.skinShade); p(5,8,5,1,cheek); p(7,9,2,1,"#bf7b70");
     p(4,10,8,5,COLORS.shirt); p(3,11,2,4,COLORS.skin); p(10,11,2,4,COLORS.skin); p(11,12,2,3,COLORS.skin); p(4,10,1,1,COLORS.white); p(7,11,1,3,COLORS.white); p(6,12,3,1,COLORS.white);
     p(5,15,6,2,COLORS.shirt2); p(5,15,2,6,COLORS.pants); p(8,15,2,4,COLORS.pants); p(9,19,2,4,COLORS.pants); p(3,17,2,3,COLORS.pants); p(2,20,4,2,COLORS.shoe); p(8,22,4,2,COLORS.shoe); p(1,22,2,1,COLORS.shoeDark); p(10,23,2,1,COLORS.shoeDark); p(6,17,1,4,COLORS.pants2); p(8,18,1,5,COLORS.pants2);
   } else if (phase === "run-1") {
     p(1,2,2,1,hairGold); p(2,1,3,2,hairGold); p(8,1,3,2,hairGold); p(10,1,2,1,hairGold); p(0,4,3,2,hairCopper); p(10,4,3,2,hairCopper); p(0,6,2,4,hairCopper); p(10,6,2,4,hairCopper); p(3,1,8,1,hairCopper); p(2,2,10,1,hairCopper); p(1,3,12,7,hairShadow);
-    p(2,4,10,4,hairCopper); p(3,4,8,5,COLORS.skin); p(4,3,7,2,hairGold); p(3,6,2,2,COLORS.skin); p(9,6,2,2,COLORS.skin); p(4,5,3,2,COLORS.white); p(8,5,3,2,COLORS.white); p(7,5,1,1,COLORS.white); p(5,6,1,blink ? 1 : 2,COLORS.ink); p(9,6,1,blink ? 1 : 2,COLORS.ink); p(6,8,1,1,COLORS.skinShade); p(5,8,5,1,cheek); p(7,9,2,1,"#bf7b70");
+    p(2,4,10,4,hairCopper); p(3,4,8,5,COLORS.skin); p(4,3,7,2,hairGold); p(3,6,2,2,COLORS.skin); p(9,6,2,2,COLORS.skin); p(4,5,3,2,COLORS.white); p(8,5,3,2,COLORS.white); p(7,5,1,1,COLORS.white); p(5,6,1,blink ? 1 : 2,eyeBlue); p(9,6,1,blink ? 1 : 2,eyeBlue); p(6,8,1,1,COLORS.skinShade); p(5,8,5,1,cheek); p(7,9,2,1,"#bf7b70");
     p(4,10,8,5,COLORS.shirt); p(2,12,2,4,COLORS.skin); p(10,10,2,4,COLORS.skin); p(11,12,2,2,COLORS.skin); p(4,10,1,1,COLORS.white); p(7,11,1,3,COLORS.white); p(6,12,3,1,COLORS.white); p(5,15,6,2,COLORS.shirt2); p(8,15,2,6,COLORS.pants); p(5,15,2,4,COLORS.pants); p(4,19,2,4,COLORS.pants); p(9,17,2,3,COLORS.pants); p(3,22,4,2,COLORS.shoe); p(8,20,4,2,COLORS.shoe); p(3,23,2,1,COLORS.shoeDark); p(10,21,2,1,COLORS.shoeDark); p(8,17,1,4,COLORS.pants2); p(5,18,1,5,COLORS.pants2);
   } else if (phase === "jump") {
     p(1,2,2,1,hairGold); p(2,2,3,2,hairGold); p(8,2,3,2,hairGold); p(10,3,2,1,hairGold); p(0,5,3,2,hairCopper); p(10,5,3,2,hairCopper); p(0,7,2,4,hairCopper); p(10,7,2,4,hairCopper); p(3,1,8,1,hairCopper); p(2,2,10,1,hairCopper); p(1,3,12,7,hairShadow);
-    p(2,4,10,4,hairCopper); p(3,4,8,5,COLORS.skin); p(4,3,7,2,hairGold); p(4,5,3,2,COLORS.white); p(8,5,3,2,COLORS.white); p(7,5,1,1,COLORS.white); p(5,6,1,blink ? 1 : 2,COLORS.ink); p(9,6,1,blink ? 1 : 2,COLORS.ink); p(6,8,1,1,COLORS.skinShade); p(5,8,5,1,cheek); p(7,9,2,1,"#bf7b70"); p(4,10,8,5,COLORS.shirt); p(2,11,2,4,COLORS.skin); p(10,11,2,4,COLORS.skin); p(4,10,1,1,COLORS.white); p(7,11,1,3,COLORS.white); p(6,12,3,1,COLORS.white); p(5,15,6,2,COLORS.shirt2); p(5,16,2,4,COLORS.pants); p(8,16,2,4,COLORS.pants); p(4,18,3,2,COLORS.pants2); p(8,18,3,2,COLORS.pants2); p(3,20,4,2,COLORS.shoe); p(8,20,4,2,COLORS.shoe); p(3,21,2,1,COLORS.shoeDark); p(10,21,2,1,COLORS.shoeDark);
+    p(2,4,10,4,hairCopper); p(3,4,8,5,COLORS.skin); p(4,3,7,2,hairGold); p(4,5,3,2,COLORS.white); p(8,5,3,2,COLORS.white); p(7,5,1,1,COLORS.white); p(5,6,1,blink ? 1 : 2,eyeBlue); p(9,6,1,blink ? 1 : 2,eyeBlue); p(6,8,1,1,COLORS.skinShade); p(5,8,5,1,cheek); p(7,9,2,1,"#bf7b70"); p(4,10,8,5,COLORS.shirt); p(2,11,2,4,COLORS.skin); p(10,11,2,4,COLORS.skin); p(4,10,1,1,COLORS.white); p(7,11,1,3,COLORS.white); p(6,12,3,1,COLORS.white); p(5,15,6,2,COLORS.shirt2); p(5,16,2,4,COLORS.pants); p(8,16,2,4,COLORS.pants); p(4,18,3,2,COLORS.pants2); p(8,18,3,2,COLORS.pants2); p(3,20,4,2,COLORS.shoe); p(8,20,4,2,COLORS.shoe); p(3,21,2,1,COLORS.shoeDark); p(10,21,2,1,COLORS.shoeDark);
   } else if (phase === "duck-0") {
-    p(2,6,4,2,hairGold); p(10,6,4,2,hairGold); p(0,8,4,2,hairCopper); p(12,8,4,2,hairCopper); p(1,10,2,3,hairCopper); p(13,10,2,3,hairCopper); p(4,5,8,1,hairCopper); p(3,6,10,1,hairCopper); p(2,7,12,6,hairShadow); p(3,8,10,4,hairCopper); p(4,8,8,4,COLORS.skin); p(5,7,7,2,hairGold); p(5,9,3,2,COLORS.white); p(9,9,3,2,COLORS.white); p(8,9,1,1,COLORS.white); p(6,10,1,1,COLORS.ink); p(10,10,1,1,COLORS.ink); p(7,11,1,1,COLORS.skinShade); p(6,11,5,1,cheek); p(8,11,2,1,"#bf7b70"); p(6,12,10,3,COLORS.shirt); p(3,13,3,2,COLORS.skin); p(13,13,3,2,COLORS.skin); p(7,12,1,1,COLORS.white); p(10,12,1,2,COLORS.white); p(9,13,3,1,COLORS.white); p(7,15,9,2,COLORS.pants); p(4,16,6,2,COLORS.shoe); p(12,16,6,2,COLORS.shoe); p(4,17,2,1,COLORS.shoeDark); p(16,17,2,1,COLORS.shoeDark);
+    p(2,6,4,2,hairGold); p(10,6,4,2,hairGold); p(0,8,4,2,hairCopper); p(12,8,4,2,hairCopper); p(1,10,2,3,hairCopper); p(13,10,2,3,hairCopper); p(4,5,8,1,hairCopper); p(3,6,10,1,hairCopper); p(2,7,12,6,hairShadow); p(3,8,10,4,hairCopper); p(4,8,8,4,COLORS.skin); p(5,7,7,2,hairGold); p(5,9,3,2,COLORS.white); p(9,9,3,2,COLORS.white); p(8,9,1,1,COLORS.white); p(6,10,1,1,eyeBlue); p(10,10,1,1,eyeBlue); p(7,11,1,1,COLORS.skinShade); p(6,11,5,1,cheek); p(8,11,2,1,"#bf7b70"); p(6,12,10,3,COLORS.shirt); p(3,13,3,2,COLORS.skin); p(13,13,3,2,COLORS.skin); p(7,12,1,1,COLORS.white); p(10,12,1,2,COLORS.white); p(9,13,3,1,COLORS.white); p(7,15,9,2,COLORS.pants); p(4,16,6,2,COLORS.shoe); p(12,16,6,2,COLORS.shoe); p(4,17,2,1,COLORS.shoeDark); p(16,17,2,1,COLORS.shoeDark);
   } else {
-    p(2,6,4,2,hairGold); p(10,6,4,2,hairGold); p(1,8,4,2,hairCopper); p(11,8,4,2,hairCopper); p(1,10,2,3,hairCopper); p(13,10,2,3,hairCopper); p(4,5,8,1,hairCopper); p(3,6,10,1,hairCopper); p(2,7,12,6,hairShadow); p(3,8,10,4,hairCopper); p(4,8,8,4,COLORS.skin); p(5,7,7,2,hairGold); p(5,9,3,2,COLORS.white); p(9,9,3,2,COLORS.white); p(8,9,1,1,COLORS.white); p(6,10,1,1,COLORS.ink); p(10,10,1,1,COLORS.ink); p(7,11,1,1,COLORS.skinShade); p(6,11,5,1,cheek); p(8,11,2,1,"#bf7b70"); p(6,12,10,3,COLORS.shirt); p(2,13,3,2,COLORS.skin); p(13,12,3,2,COLORS.skin); p(7,12,1,1,COLORS.white); p(10,12,1,2,COLORS.white); p(9,13,3,1,COLORS.white); p(7,15,9,2,COLORS.pants); p(5,16,6,2,COLORS.shoe); p(12,15,6,2,COLORS.shoe); p(5,17,2,1,COLORS.shoeDark); p(16,16,2,1,COLORS.shoeDark);
+    p(2,6,4,2,hairGold); p(10,6,4,2,hairGold); p(1,8,4,2,hairCopper); p(11,8,4,2,hairCopper); p(1,10,2,3,hairCopper); p(13,10,2,3,hairCopper); p(4,5,8,1,hairCopper); p(3,6,10,1,hairCopper); p(2,7,12,6,hairShadow); p(3,8,10,4,hairCopper); p(4,8,8,4,COLORS.skin); p(5,7,7,2,hairGold); p(5,9,3,2,COLORS.white); p(9,9,3,2,COLORS.white); p(8,9,1,1,COLORS.white); p(6,10,1,1,eyeBlue); p(10,10,1,1,eyeBlue); p(7,11,1,1,COLORS.skinShade); p(6,11,5,1,cheek); p(8,11,2,1,"#bf7b70"); p(6,12,10,3,COLORS.shirt); p(2,13,3,2,COLORS.skin); p(13,12,3,2,COLORS.skin); p(7,12,1,1,COLORS.white); p(10,12,1,2,COLORS.white); p(9,13,3,1,COLORS.white); p(7,15,9,2,COLORS.pants); p(5,16,6,2,COLORS.shoe); p(12,15,6,2,COLORS.shoe); p(5,17,2,1,COLORS.shoeDark); p(16,16,2,1,COLORS.shoeDark);
+  }
+}
+
+function drawJime(ctx: CanvasRenderingContext2D, player: PlayerState, worldTime: number) {
+  const baseX = player.x;
+  const { top, phase } = getRunnerPhase(player, worldTime);
+  const blink = Math.floor(worldTime / 1400) % 9 === 0 && !player.dead;
+  const p = (x: number, y: number, w = 1, h = 1, color: string = COLORS.ink) =>
+    drawRect(ctx, baseX + x, top + y, w, h, color);
+  const hairDark = "#1f1819";
+  const hairMid = "#2f2528";
+  const hairLight = "#4a3e42";
+  const hairShine = "#695c61";
+  const mouth = "#b87978";
+
+  if (phase === "run-0") {
+    p(1,1,2,1,hairShine); p(2,1,3,2,hairShine); p(8,1,3,2,hairShine); p(10,2,2,1,hairShine); p(0,4,3,2,hairMid); p(10,4,3,2,hairMid); p(1,6,2,4,hairDark); p(10,6,2,4,hairDark); p(3,1,8,1,hairMid); p(2,2,10,1,hairMid); p(1,3,12,7,hairDark);
+    p(2,4,10,4,hairDark); p(3,4,8,5,COLORS.skin); p(4,3,7,2,hairLight); p(3,6,2,2,COLORS.skin); p(9,6,2,2,COLORS.skin);
+    p(4,5,3,2,COLORS.white); p(8,5,3,2,COLORS.white); p(7,5,1,1,COLORS.white); p(5,6,1,blink ? 1 : 2,COLORS.ink); p(9,6,1,blink ? 1 : 2,COLORS.ink); p(6,8,1,1,COLORS.skinShade); p(6,9,2,1,mouth);
+    p(4,10,8,5,COLORS.shirt); p(3,11,2,4,COLORS.skin); p(10,11,2,4,COLORS.skin); p(11,12,2,3,COLORS.skin); p(4,10,1,1,COLORS.white); p(7,11,1,3,COLORS.white); p(6,12,3,1,COLORS.white);
+    p(5,15,6,2,COLORS.shirt2); p(5,15,2,6,COLORS.pants); p(8,15,2,4,COLORS.pants); p(9,19,2,4,COLORS.pants); p(3,17,2,3,COLORS.pants); p(2,20,4,2,COLORS.shoe); p(8,22,4,2,COLORS.shoe); p(1,22,2,1,COLORS.shoeDark); p(10,23,2,1,COLORS.shoeDark); p(6,17,1,4,COLORS.pants2); p(8,18,1,5,COLORS.pants2);
+  } else if (phase === "run-1") {
+    p(1,2,2,1,hairShine); p(2,1,3,2,hairShine); p(8,1,3,2,hairShine); p(10,1,2,1,hairShine); p(0,4,3,2,hairMid); p(10,4,3,2,hairMid); p(0,6,2,4,hairDark); p(10,6,2,4,hairDark); p(3,1,8,1,hairMid); p(2,2,10,1,hairMid); p(1,3,12,7,hairDark);
+    p(2,4,10,4,hairDark); p(3,4,8,5,COLORS.skin); p(4,3,7,2,hairLight); p(3,6,2,2,COLORS.skin); p(9,6,2,2,COLORS.skin); p(4,5,3,2,COLORS.white); p(8,5,3,2,COLORS.white); p(7,5,1,1,COLORS.white); p(5,6,1,blink ? 1 : 2,COLORS.ink); p(9,6,1,blink ? 1 : 2,COLORS.ink); p(6,8,1,1,COLORS.skinShade); p(6,9,2,1,mouth);
+    p(4,10,8,5,COLORS.shirt); p(2,12,2,4,COLORS.skin); p(10,10,2,4,COLORS.skin); p(11,12,2,2,COLORS.skin); p(4,10,1,1,COLORS.white); p(7,11,1,3,COLORS.white); p(6,12,3,1,COLORS.white); p(5,15,6,2,COLORS.shirt2); p(8,15,2,6,COLORS.pants); p(5,15,2,4,COLORS.pants); p(4,19,2,4,COLORS.pants); p(9,17,2,3,COLORS.pants); p(3,22,4,2,COLORS.shoe); p(8,20,4,2,COLORS.shoe); p(3,23,2,1,COLORS.shoeDark); p(10,21,2,1,COLORS.shoeDark); p(8,17,1,4,COLORS.pants2); p(5,18,1,5,COLORS.pants2);
+  } else if (phase === "jump") {
+    p(1,2,2,1,hairShine); p(2,2,3,2,hairShine); p(8,2,3,2,hairShine); p(10,3,2,1,hairShine); p(0,5,3,2,hairMid); p(10,5,3,2,hairMid); p(0,7,2,4,hairDark); p(10,7,2,4,hairDark); p(3,1,8,1,hairMid); p(2,2,10,1,hairMid); p(1,3,12,7,hairDark);
+    p(2,4,10,4,hairDark); p(3,4,8,5,COLORS.skin); p(4,3,7,2,hairLight); p(4,5,3,2,COLORS.white); p(8,5,3,2,COLORS.white); p(7,5,1,1,COLORS.white); p(5,6,1,blink ? 1 : 2,COLORS.ink); p(9,6,1,blink ? 1 : 2,COLORS.ink); p(6,8,1,1,COLORS.skinShade); p(6,9,2,1,mouth); p(4,10,8,5,COLORS.shirt); p(2,11,2,4,COLORS.skin); p(10,11,2,4,COLORS.skin); p(4,10,1,1,COLORS.white); p(7,11,1,3,COLORS.white); p(6,12,3,1,COLORS.white); p(5,15,6,2,COLORS.shirt2); p(5,16,2,4,COLORS.pants); p(8,16,2,4,COLORS.pants); p(4,18,3,2,COLORS.pants2); p(8,18,3,2,COLORS.pants2); p(3,20,4,2,COLORS.shoe); p(8,20,4,2,COLORS.shoe); p(3,21,2,1,COLORS.shoeDark); p(10,21,2,1,COLORS.shoeDark);
+  } else if (phase === "duck-0") {
+    p(2,6,4,2,hairLight); p(10,6,4,2,hairLight); p(0,8,4,2,hairMid); p(12,8,4,2,hairMid); p(1,10,2,3,hairDark); p(13,10,2,3,hairDark); p(4,5,8,1,hairMid); p(3,6,10,1,hairMid); p(2,7,12,6,hairDark); p(3,8,10,4,COLORS.skin);
+    p(5,9,3,2,COLORS.white); p(9,9,3,2,COLORS.white); p(8,9,1,1,COLORS.white); p(6,10,1,1,COLORS.ink); p(10,10,1,1,COLORS.ink); p(7,11,1,1,COLORS.skinShade); p(8,11,2,1,mouth); p(6,12,10,3,COLORS.shirt); p(3,13,3,2,COLORS.skin); p(13,13,3,2,COLORS.skin); p(7,12,1,1,COLORS.white); p(10,12,1,2,COLORS.white); p(9,13,3,1,COLORS.white); p(7,15,9,2,COLORS.pants); p(4,16,6,2,COLORS.shoe); p(12,16,6,2,COLORS.shoe); p(4,17,2,1,COLORS.shoeDark); p(16,17,2,1,COLORS.shoeDark);
+  } else {
+    p(2,6,4,2,hairLight); p(10,6,4,2,hairLight); p(1,8,4,2,hairMid); p(11,8,4,2,hairMid); p(1,10,2,3,hairDark); p(13,10,2,3,hairDark); p(4,5,8,1,hairMid); p(3,6,10,1,hairMid); p(2,7,12,6,hairDark); p(3,8,10,4,COLORS.skin);
+    p(5,9,3,2,COLORS.white); p(9,9,3,2,COLORS.white); p(8,9,1,1,COLORS.white); p(6,10,1,1,COLORS.ink); p(10,10,1,1,COLORS.ink); p(7,11,1,1,COLORS.skinShade); p(8,11,2,1,mouth); p(6,12,10,3,COLORS.shirt); p(2,13,3,2,COLORS.skin); p(13,12,3,2,COLORS.skin); p(7,12,1,1,COLORS.white); p(10,12,1,2,COLORS.white); p(9,13,3,1,COLORS.white); p(7,15,9,2,COLORS.pants); p(5,16,6,2,COLORS.shoe); p(12,15,6,2,COLORS.shoe); p(5,17,2,1,COLORS.shoeDark); p(16,16,2,1,COLORS.shoeDark);
+  }
+}
+
+function drawSanti(ctx: CanvasRenderingContext2D, player: PlayerState, worldTime: number) {
+  const baseX = player.x;
+  const { top, phase } = getRunnerPhase(player, worldTime);
+  const blink = Math.floor(worldTime / 1400) % 9 === 0 && !player.dead;
+  const p = (x: number, y: number, w = 1, h = 1, color: string = COLORS.ink) =>
+    drawRect(ctx, baseX + x, top + y, w, h, color);
+  const skin = "#ddb18e";
+  const skinShade = "#bc805d";
+  const hairDark = "#1b171b";
+  const hairMid = "#302930";
+  const hairLight = "#4b414d";
+  const cheek = "#d59a8f";
+  const mouth = "#a56362";
+  const beard = "#b88874";
+  const beardSoft = "#d3ae97";
+  const gust = Math.sin(worldTime * 0.028);
+  const leftCurlX = gust < -0.2 ? 0 : 1;
+  const rightCurlX = gust > 0.2 ? 11 : 10;
+  const curlDrop = Math.cos(worldTime * 0.024) > 0 ? 1 : 0;
+
+  if (phase === "run-0") {
+    p(1,1,2,2,hairLight); p(3,1,6,1,hairMid); p(9,1,2,2,hairLight); p(0,3,3,3,hairMid); p(10,3,3,3,hairMid); p(0,5,2,6,hairDark); p(10,5,2,6,hairDark); p(2,2,9,1,hairMid); p(1,3,11,6,hairDark); p(2,0,2,1,hairLight); p(8,0,2,1,hairLight);
+    p(leftCurlX, 9 + curlDrop, 2, 2, hairMid); p(rightCurlX, 9 + (curlDrop ? 0 : 1), 2, 2, hairMid);
+    p(2,4,10,4,hairDark); p(3,4,8,5,skin); p(3,6,2,2,skin); p(9,6,2,2,skin); p(4,5,3,2,COLORS.white); p(8,5,3,2,COLORS.white); p(7,5,1,1,COLORS.white); p(5,6,1,blink ? 1 : 2,COLORS.ink); p(9,6,1,blink ? 1 : 2,COLORS.ink); p(6,8,1,1,skinShade); p(5,8,5,1,cheek); p(6,9,3,1,mouth); p(4,9,5,1,beard); p(5,10,3,1,beardSoft);
+    p(4,10,8,5,COLORS.shirt); p(3,11,2,4,skin); p(10,11,2,4,skin); p(11,12,2,3,skin); p(4,10,1,1,COLORS.white); p(7,11,1,3,COLORS.white); p(6,12,3,1,COLORS.white);
+    p(5,15,6,2,COLORS.shirt2); p(5,15,2,6,COLORS.pants); p(8,15,2,4,COLORS.pants); p(9,19,2,4,COLORS.pants); p(3,17,2,3,COLORS.pants); p(2,20,4,2,COLORS.shoe); p(8,22,4,2,COLORS.shoe); p(1,22,2,1,COLORS.shoeDark); p(10,23,2,1,COLORS.shoeDark); p(6,17,1,4,COLORS.pants2); p(8,18,1,5,COLORS.pants2);
+  } else if (phase === "run-1") {
+    p(1,2,2,2,hairLight); p(3,1,6,1,hairMid); p(9,1,2,2,hairLight); p(0,3,3,3,hairMid); p(10,3,3,3,hairMid); p(0,5,2,6,hairDark); p(10,5,2,6,hairDark); p(2,2,9,1,hairMid); p(1,3,11,6,hairDark); p(2,0,2,1,hairLight); p(8,0,2,1,hairLight);
+    p(leftCurlX, 9 + curlDrop, 2, 2, hairMid); p(rightCurlX, 9 + (curlDrop ? 0 : 1), 2, 2, hairMid);
+    p(2,4,10,4,hairDark); p(3,4,8,5,skin); p(3,6,2,2,skin); p(9,6,2,2,skin); p(4,5,3,2,COLORS.white); p(8,5,3,2,COLORS.white); p(7,5,1,1,COLORS.white); p(5,6,1,blink ? 1 : 2,COLORS.ink); p(9,6,1,blink ? 1 : 2,COLORS.ink); p(6,8,1,1,skinShade); p(5,8,5,1,cheek); p(6,9,3,1,mouth); p(4,9,5,1,beard); p(5,10,3,1,beardSoft);
+    p(4,10,8,5,COLORS.shirt); p(2,12,2,4,skin); p(10,10,2,4,skin); p(11,12,2,2,skin); p(4,10,1,1,COLORS.white); p(7,11,1,3,COLORS.white); p(6,12,3,1,COLORS.white); p(5,15,6,2,COLORS.shirt2); p(8,15,2,6,COLORS.pants); p(5,15,2,4,COLORS.pants); p(4,19,2,4,COLORS.pants); p(9,17,2,3,COLORS.pants); p(3,22,4,2,COLORS.shoe); p(8,20,4,2,COLORS.shoe); p(3,23,2,1,COLORS.shoeDark); p(10,21,2,1,COLORS.shoeDark); p(8,17,1,4,COLORS.pants2); p(5,18,1,5,COLORS.pants2);
+  } else if (phase === "jump") {
+    p(1,2,2,2,hairLight); p(3,2,6,1,hairMid); p(9,2,2,2,hairLight); p(0,4,3,3,hairMid); p(10,4,3,3,hairMid); p(0,6,2,6,hairDark); p(10,6,2,6,hairDark); p(2,3,9,1,hairMid); p(1,4,11,6,hairDark); p(2,1,2,1,hairLight); p(8,1,2,1,hairLight);
+    p(leftCurlX, 10 + curlDrop, 2, 2, hairMid); p(rightCurlX, 10 + (curlDrop ? 0 : 1), 2, 2, hairMid);
+    p(2,5,10,3,hairDark); p(3,4,8,5,skin); p(4,5,3,2,COLORS.white); p(8,5,3,2,COLORS.white); p(7,5,1,1,COLORS.white); p(5,6,1,blink ? 1 : 2,COLORS.ink); p(9,6,1,blink ? 1 : 2,COLORS.ink); p(6,8,1,1,skinShade); p(5,8,5,1,cheek); p(6,9,3,1,mouth); p(4,9,5,1,beard); p(5,10,3,1,beardSoft);
+    p(4,10,8,5,COLORS.shirt); p(2,11,2,4,skin); p(10,11,2,4,skin); p(4,10,1,1,COLORS.white); p(7,11,1,3,COLORS.white); p(6,12,3,1,COLORS.white); p(5,15,6,2,COLORS.shirt2); p(5,16,2,4,COLORS.pants); p(8,16,2,4,COLORS.pants); p(4,18,3,2,COLORS.pants2); p(8,18,3,2,COLORS.pants2); p(3,20,4,2,COLORS.shoe); p(8,20,4,2,COLORS.shoe); p(3,21,2,1,COLORS.shoeDark); p(10,21,2,1,COLORS.shoeDark);
+  } else if (phase === "duck-0") {
+    p(1,6,3,2,hairLight); p(10,6,3,2,hairLight); p(0,8,4,2,hairMid); p(11,8,4,2,hairMid); p(1,10,2,3,hairDark); p(13,10,2,3,hairDark); p(4,5,8,1,hairMid); p(3,6,10,1,hairMid); p(2,7,12,6,hairDark); p(3,8,10,4,skin);
+    p(leftCurlX, 11 + curlDrop, 2, 2, hairMid); p(rightCurlX + 1, 11 + (curlDrop ? 0 : 1), 2, 2, hairMid);
+    p(5,9,3,2,COLORS.white); p(9,9,3,2,COLORS.white); p(8,9,1,1,COLORS.white); p(6,10,1,1,COLORS.ink); p(10,10,1,1,COLORS.ink); p(7,11,1,1,skinShade); p(6,11,5,1,cheek); p(8,11,2,1,mouth); p(5,11,5,1,beard); p(6,12,3,1,beardSoft); p(6,12,10,3,COLORS.shirt); p(3,13,3,2,skin); p(13,13,3,2,skin); p(7,12,1,1,COLORS.white); p(10,12,1,2,COLORS.white); p(9,13,3,1,COLORS.white); p(7,15,9,2,COLORS.pants); p(4,16,6,2,COLORS.shoe); p(12,16,6,2,COLORS.shoe); p(4,17,2,1,COLORS.shoeDark); p(16,17,2,1,COLORS.shoeDark);
+  } else {
+    p(2,6,4,2,hairLight); p(10,6,4,2,hairLight); p(1,8,4,2,hairMid); p(11,8,4,2,hairMid); p(1,10,2,3,hairDark); p(13,10,2,3,hairDark); p(4,5,8,1,hairMid); p(3,6,10,1,hairMid); p(2,7,12,6,hairDark); p(3,8,10,4,skin);
+    p(leftCurlX, 11 + curlDrop, 2, 2, hairMid); p(rightCurlX + 1, 11 + (curlDrop ? 0 : 1), 2, 2, hairMid);
+    p(5,9,3,2,COLORS.white); p(9,9,3,2,COLORS.white); p(8,9,1,1,COLORS.white); p(6,10,1,1,COLORS.ink); p(10,10,1,1,COLORS.ink); p(7,11,1,1,skinShade); p(6,11,5,1,cheek); p(8,11,2,1,mouth); p(5,11,5,1,beard); p(6,12,3,1,beardSoft); p(6,12,10,3,COLORS.shirt); p(2,13,3,2,skin); p(13,12,3,2,skin); p(7,12,1,1,COLORS.white); p(10,12,1,2,COLORS.white); p(9,13,3,1,COLORS.white); p(7,15,9,2,COLORS.pants); p(5,16,6,2,COLORS.shoe); p(12,15,6,2,COLORS.shoe); p(5,17,2,1,COLORS.shoeDark); p(16,16,2,1,COLORS.shoeDark);
+  }
+}
+
+function drawPablo(ctx: CanvasRenderingContext2D, player: PlayerState, worldTime: number) {
+  const baseX = player.x;
+  const { top, phase } = getRunnerPhase(player, worldTime);
+  const blink = Math.floor(worldTime / 1400) % 9 === 0 && !player.dead;
+  const p = (x: number, y: number, w = 1, h = 1, color: string = COLORS.ink) =>
+    drawRect(ctx, baseX + x, top + y, w, h, color);
+  const skin = "#e8c3a5";
+  const skinShade = "#c49274";
+  const hairDark = "#5b5551";
+  const hairMid = "#7c746f";
+  const hairLight = "#a39b95";
+  const beard = "#dad8d3";
+  const beardShade = "#b9b5af";
+  const moustache = "#8f857f";
+
+  if (phase === "run-0") {
+    p(2,2,2,1,hairLight); p(4,1,5,1,hairMid); p(9,2,2,1,hairLight); p(3,2,7,1,hairDark); p(2,3,9,1,hairDark); p(2,4,9,4,hairMid);
+    p(3,4,7,5,skin); p(2,5,1,2,skin); p(10,5,1,2,skin); p(4,5,2,1,COLORS.white); p(7,5,2,1,COLORS.white); p(5,6,1,blink ? 1 : 2,COLORS.ink); p(8,6,1,blink ? 1 : 2,COLORS.ink); p(6,7,1,1,skinShade); p(4,8,5,1,moustache); p(3,9,7,4,beard); p(4,9,5,2,beardShade); p(6,12,2,1,"#b9857f");
+    p(3,10,10,5,COLORS.shirt); p(4,10,1,1,COLORS.white); p(8,11,1,3,COLORS.white); p(6,12,4,1,COLORS.white); p(2,11,2,4,skin); p(11,11,2,4,skin); p(3,15,10,2,COLORS.shirt2);
+    p(4,15,2,6,COLORS.pants); p(7,15,2,4,COLORS.pants); p(8,19,2,4,COLORS.pants); p(2,17,2,3,COLORS.pants); p(2,20,4,2,COLORS.shoe); p(7,22,4,2,COLORS.shoe); p(1,22,2,1,COLORS.shoeDark); p(9,23,2,1,COLORS.shoeDark); p(5,17,1,4,COLORS.pants2); p(7,18,1,5,COLORS.pants2);
+  } else if (phase === "run-1") {
+    p(2,2,2,1,hairLight); p(4,1,5,1,hairMid); p(9,2,2,1,hairLight); p(3,2,7,1,hairDark); p(2,3,9,1,hairDark); p(2,4,9,4,hairMid);
+    p(3,4,7,5,skin); p(2,5,1,2,skin); p(10,5,1,2,skin); p(4,5,2,1,COLORS.white); p(7,5,2,1,COLORS.white); p(5,6,1,blink ? 1 : 2,COLORS.ink); p(8,6,1,blink ? 1 : 2,COLORS.ink); p(6,7,1,1,skinShade); p(4,8,5,1,moustache); p(3,9,7,4,beard); p(4,9,5,2,beardShade); p(6,12,2,1,"#b9857f");
+    p(3,10,10,5,COLORS.shirt); p(4,10,1,1,COLORS.white); p(8,11,1,3,COLORS.white); p(6,12,4,1,COLORS.white); p(1,12,2,4,skin); p(11,10,2,4,skin); p(3,15,10,2,COLORS.shirt2);
+    p(7,15,2,6,COLORS.pants); p(4,15,2,4,COLORS.pants); p(3,19,2,4,COLORS.pants); p(8,17,2,3,COLORS.pants); p(2,22,4,2,COLORS.shoe); p(7,20,4,2,COLORS.shoe); p(2,23,2,1,COLORS.shoeDark); p(9,21,2,1,COLORS.shoeDark); p(7,17,1,4,COLORS.pants2); p(4,18,1,5,COLORS.pants2);
+  } else if (phase === "jump") {
+    p(2,2,2,1,hairLight); p(4,1,5,1,hairMid); p(9,2,2,1,hairLight); p(3,2,7,1,hairDark); p(2,3,9,1,hairDark); p(2,4,9,4,hairMid);
+    p(3,4,7,5,skin); p(2,5,1,2,skin); p(10,5,1,2,skin); p(4,5,2,1,COLORS.white); p(7,5,2,1,COLORS.white); p(5,6,1,blink ? 1 : 2,COLORS.ink); p(8,6,1,blink ? 1 : 2,COLORS.ink); p(6,7,1,1,skinShade); p(4,8,5,1,moustache); p(3,9,7,4,beard); p(4,9,5,2,beardShade); p(6,12,2,1,"#b9857f");
+    p(3,10,10,5,COLORS.shirt); p(4,10,1,1,COLORS.white); p(8,11,1,3,COLORS.white); p(6,12,4,1,COLORS.white); p(1,11,2,4,skin); p(11,11,2,4,skin); p(3,15,10,2,COLORS.shirt2);
+    p(4,16,2,4,COLORS.pants); p(7,16,2,4,COLORS.pants); p(3,18,3,2,COLORS.pants2); p(7,18,3,2,COLORS.pants2); p(2,20,4,2,COLORS.shoe); p(7,20,4,2,COLORS.shoe); p(2,21,2,1,COLORS.shoeDark); p(9,21,2,1,COLORS.shoeDark);
+  } else if (phase === "duck-0") {
+    p(3,5,7,1,hairDark); p(2,6,9,1,hairDark); p(2,7,9,4,hairMid); p(3,7,2,1,hairLight); p(8,7,2,1,hairLight); p(3,7,7,4,skin); p(4,8,2,1,COLORS.white); p(7,8,2,1,COLORS.white); p(5,9,1,1,COLORS.ink); p(8,9,1,1,COLORS.ink); p(5,10,4,1,moustache); p(4,11,6,3,beard); p(5,11,4,1,beardShade); p(6,10,1,1,skinShade);
+    p(5,12,12,3,COLORS.shirt); p(7,12,1,1,COLORS.white); p(10,12,1,2,COLORS.white); p(9,13,4,1,COLORS.white); p(2,13,3,2,skin); p(14,13,3,2,skin); p(7,15,10,2,COLORS.pants); p(4,16,6,2,COLORS.shoe); p(12,16,6,2,COLORS.shoe); p(4,17,2,1,COLORS.shoeDark); p(16,17,2,1,COLORS.shoeDark);
+  } else {
+    p(3,5,7,1,hairDark); p(2,6,9,1,hairDark); p(2,7,9,4,hairMid); p(3,7,2,1,hairLight); p(8,7,2,1,hairLight); p(3,7,7,4,skin); p(4,8,2,1,COLORS.white); p(7,8,2,1,COLORS.white); p(5,9,1,1,COLORS.ink); p(8,9,1,1,COLORS.ink); p(5,10,4,1,moustache); p(4,11,6,3,beard); p(5,11,4,1,beardShade); p(6,10,1,1,skinShade);
+    p(5,12,12,3,COLORS.shirt); p(7,12,1,1,COLORS.white); p(10,12,1,2,COLORS.white); p(9,13,4,1,COLORS.white); p(1,13,3,2,skin); p(14,12,3,2,skin); p(7,15,10,2,COLORS.pants); p(5,16,6,2,COLORS.shoe); p(12,15,6,2,COLORS.shoe); p(5,17,2,1,COLORS.shoeDark); p(16,16,2,1,COLORS.shoeDark);
+  }
+}
+
+function drawEli(ctx: CanvasRenderingContext2D, player: PlayerState, worldTime: number) {
+  const baseX = player.x;
+  const { top, phase } = getRunnerPhase(player, worldTime);
+  const blink = Math.floor(worldTime / 1400) % 9 === 0 && !player.dead;
+  const p = (x: number, y: number, w = 1, h = 1, color: string = COLORS.ink) =>
+    drawRect(ctx, baseX + x, top + y, w, h, color);
+  const skin = "#ddb18e";
+  const skinShade = "#bc805d";
+  const hairDark = "#1b1718";
+  const hairMid = "#2c2326";
+  const hairLight = "#4a4044";
+  const cheek = "#d9918a";
+  const mouth = "#ae666c";
+  const gust = Math.sin(worldTime * 0.026);
+  const ponyOffset = gust > 0.24 ? 1 : gust < -0.24 ? -1 : 0;
+  const ponyDrop = Math.cos(worldTime * 0.02) > 0 ? 1 : 0;
+
+  if (phase === "run-0") {
+    p(5,0,2,2,hairLight); p(4,1,4,2,hairDark); p(6,2,1,2,hairLight);
+    p(2,3,3,2,hairLight); p(8,3,3,2,hairLight); p(3,2,8,1,hairMid); p(2,3,10,1,hairMid); p(2,4,10,5,hairDark);
+    p(0 + ponyOffset, 7 + ponyDrop, 2, 3, hairMid); p(-1 + ponyOffset, 9 + ponyDrop, 2, 3, hairDark); p(-1 + ponyOffset, 11 + ponyDrop, 1, 2, hairLight);
+    p(2,4,10,4,hairDark); p(3,4,8,5,skin); p(4,3,7,2,hairLight); p(3,6,2,2,skin); p(9,6,2,2,skin);
+    p(4,5,3,2,COLORS.white); p(8,5,3,2,COLORS.white); p(7,5,1,1,COLORS.white); p(5,6,1,blink ? 1 : 2,COLORS.ink); p(9,6,1,blink ? 1 : 2,COLORS.ink); p(6,8,1,1,skinShade); p(5,8,4,1,cheek); p(6,9,2,1,mouth);
+    p(4,10,8,5,COLORS.shirt); p(3,11,2,4,skin); p(10,11,2,4,skin); p(11,12,2,3,skin); p(4,10,1,1,COLORS.white); p(7,11,1,3,COLORS.white); p(6,12,3,1,COLORS.white);
+    p(5,15,6,2,COLORS.shirt2); p(5,15,2,6,COLORS.pants); p(8,15,2,4,COLORS.pants); p(9,19,2,4,COLORS.pants); p(3,17,2,3,COLORS.pants); p(2,20,4,2,COLORS.shoe); p(8,22,4,2,COLORS.shoe); p(1,22,2,1,COLORS.shoeDark); p(10,23,2,1,COLORS.shoeDark); p(6,17,1,4,COLORS.pants2); p(8,18,1,5,COLORS.pants2);
+  } else if (phase === "run-1") {
+    p(5,0,2,2,hairLight); p(4,1,4,2,hairDark); p(6,2,1,2,hairLight);
+    p(1,3,4,2,hairLight); p(3,2,8,1,hairMid); p(2,3,10,1,hairMid); p(2,4,10,5,hairDark);
+    p(0 + ponyOffset, 6 + ponyDrop, 2, 3, hairMid); p(-1 + ponyOffset, 8 + ponyDrop, 2, 3, hairDark); p(-1 + ponyOffset, 10 + ponyDrop, 1, 2, hairLight);
+    p(2,4,10,4,hairDark); p(3,4,8,5,skin); p(4,3,7,2,hairLight); p(3,6,2,2,skin); p(9,6,2,2,skin);
+    p(4,5,3,2,COLORS.white); p(8,5,3,2,COLORS.white); p(7,5,1,1,COLORS.white); p(5,6,1,blink ? 1 : 2,COLORS.ink); p(9,6,1,blink ? 1 : 2,COLORS.ink); p(6,8,1,1,skinShade); p(5,8,4,1,cheek); p(6,9,2,1,mouth);
+    p(4,10,8,5,COLORS.shirt); p(2,12,2,4,skin); p(10,10,2,4,skin); p(11,12,2,2,skin); p(4,10,1,1,COLORS.white); p(7,11,1,3,COLORS.white); p(6,12,3,1,COLORS.white);
+    p(5,15,6,2,COLORS.shirt2); p(8,15,2,6,COLORS.pants); p(5,15,2,4,COLORS.pants); p(4,19,2,4,COLORS.pants); p(9,17,2,3,COLORS.pants); p(3,22,4,2,COLORS.shoe); p(8,20,4,2,COLORS.shoe); p(3,23,2,1,COLORS.shoeDark); p(10,21,2,1,COLORS.shoeDark); p(8,17,1,4,COLORS.pants2); p(5,18,1,5,COLORS.pants2);
+  } else if (phase === "jump") {
+    p(5,1,2,2,hairLight); p(4,2,4,2,hairDark); p(6,3,1,2,hairLight);
+    p(1,4,4,2,hairLight); p(3,2,8,1,hairMid); p(2,3,10,1,hairMid); p(2,4,10,5,hairDark);
+    p(0 + ponyOffset, 8 + ponyDrop, 2, 3, hairMid); p(-1 + ponyOffset, 10 + ponyDrop, 2, 3, hairDark); p(-1 + ponyOffset, 12 + ponyDrop, 1, 2, hairLight);
+    p(2,4,10,4,hairDark); p(3,4,8,5,skin); p(4,3,7,2,hairLight);
+    p(4,5,3,2,COLORS.white); p(8,5,3,2,COLORS.white); p(7,5,1,1,COLORS.white); p(5,6,1,blink ? 1 : 2,COLORS.ink); p(9,6,1,blink ? 1 : 2,COLORS.ink); p(6,8,1,1,skinShade); p(5,8,4,1,cheek); p(6,9,2,1,mouth);
+    p(4,10,8,5,COLORS.shirt); p(2,11,2,4,skin); p(10,11,2,4,skin); p(4,10,1,1,COLORS.white); p(7,11,1,3,COLORS.white); p(6,12,3,1,COLORS.white);
+    p(5,15,6,2,COLORS.shirt2); p(5,16,2,4,COLORS.pants); p(8,16,2,4,COLORS.pants); p(4,18,3,2,COLORS.pants2); p(8,18,3,2,COLORS.pants2); p(3,20,4,2,COLORS.shoe); p(8,20,4,2,COLORS.shoe); p(3,21,2,1,COLORS.shoeDark); p(10,21,2,1,COLORS.shoeDark);
+  } else if (phase === "duck-0") {
+    p(4,5,7,1,hairMid); p(3,6,9,1,hairDark); p(2,7,10,5,hairDark); p(10,7,1,2,hairMid);
+    p(1 + ponyOffset, 8 + ponyDrop, 2, 3, hairMid); p(0 + ponyOffset, 10 + ponyDrop, 2, 2, hairDark); p(0 + ponyOffset, 11 + ponyDrop, 1, 2, hairLight);
+    p(4,7,7,4,skin); p(5,8,2,1,COLORS.white); p(8,8,2,1,COLORS.white); p(6,9,1,1,COLORS.ink); p(9,9,1,1,COLORS.ink); p(7,10,1,1,skinShade); p(6,10,4,1,cheek); p(7,11,2,1,mouth);
+    p(6,12,10,3,COLORS.shirt); p(3,13,3,2,skin); p(13,13,3,2,skin); p(7,12,1,1,COLORS.white); p(10,12,1,2,COLORS.white); p(9,13,3,1,COLORS.white); p(7,15,9,2,COLORS.pants); p(4,16,6,2,COLORS.shoe); p(12,16,6,2,COLORS.shoe); p(4,17,2,1,COLORS.shoeDark); p(16,17,2,1,COLORS.shoeDark);
+  } else {
+    p(4,5,7,1,hairMid); p(3,6,9,1,hairDark); p(2,7,10,5,hairDark); p(10,7,1,2,hairMid);
+    p(1 + ponyOffset, 8 + ponyDrop, 2, 3, hairMid); p(0 + ponyOffset, 9 + ponyDrop, 2, 2, hairDark); p(0 + ponyOffset, 11 + ponyDrop, 1, 2, hairLight);
+    p(4,7,7,4,skin); p(5,8,2,1,COLORS.white); p(8,8,2,1,COLORS.white); p(6,9,1,1,COLORS.ink); p(9,9,1,1,COLORS.ink); p(7,10,1,1,skinShade); p(6,10,4,1,cheek); p(7,11,2,1,mouth);
+    p(6,12,10,3,COLORS.shirt); p(2,13,3,2,skin); p(13,12,3,2,skin); p(7,12,1,1,COLORS.white); p(10,12,1,2,COLORS.white); p(9,13,3,1,COLORS.white); p(7,15,9,2,COLORS.pants); p(5,16,6,2,COLORS.shoe); p(12,15,6,2,COLORS.shoe); p(5,17,2,1,COLORS.shoeDark); p(16,16,2,1,COLORS.shoeDark);
+  }
+}
+
+function drawVero(ctx: CanvasRenderingContext2D, player: PlayerState, worldTime: number) {
+  const baseX = player.x;
+  const { top, phase } = getRunnerPhase(player, worldTime);
+  const blink = Math.floor(worldTime / 1400) % 9 === 0 && !player.dead;
+  const p = (x: number, y: number, w = 1, h = 1, color: string = COLORS.ink) =>
+    drawRect(ctx, baseX + x, top + y, w, h, color);
+  const skin = "#e3ad87";
+  const skinShade = "#c48261";
+  const hairDark = "#512d21";
+  const hairMid = "#744739";
+  const hairLight = "#9d6f58";
+  const cheek = "#de998f";
+  const mouth = "#b96e71";
+  const lash = "#2b1618";
+
+  if (phase === "run-0") {
+    p(1,1,2,2,hairLight); p(3,1,7,1,hairMid); p(10,2,2,1,hairLight); p(0,4,3,2,hairMid); p(10,4,3,2,hairMid); p(1,6,2,5,hairDark); p(10,6,2,5,hairDark); p(2,2,10,8,hairDark); p(3,3,8,2,hairMid);
+    p(3,4,8,5,skin); p(3,6,2,2,skin); p(9,6,2,2,skin); p(4,5,3,2,COLORS.white); p(8,5,3,2,COLORS.white); p(7,5,1,1,COLORS.white); p(4,4,1,1,lash); p(9,4,1,1,lash); p(5,6,1,blink ? 1 : 2,COLORS.ink); p(9,6,1,blink ? 1 : 2,COLORS.ink); p(6,7,1,1,skinShade); p(5,8,5,1,cheek); p(6,9,3,1,mouth);
+    p(4,10,8,5,COLORS.shirt); p(3,11,2,4,skin); p(10,11,2,4,skin); p(11,12,2,3,skin); p(4,10,1,1,COLORS.white); p(7,11,1,3,COLORS.white); p(6,12,3,1,COLORS.white);
+    p(5,15,6,2,COLORS.shirt2); p(5,15,2,6,COLORS.pants); p(8,15,2,4,COLORS.pants); p(9,19,2,4,COLORS.pants); p(3,17,2,3,COLORS.pants); p(2,20,4,2,COLORS.shoe); p(8,22,4,2,COLORS.shoe); p(1,22,2,1,COLORS.shoeDark); p(10,23,2,1,COLORS.shoeDark); p(6,17,1,4,COLORS.pants2); p(8,18,1,5,COLORS.pants2);
+  } else if (phase === "run-1") {
+    p(2,1,2,2,hairLight); p(3,1,7,1,hairMid); p(10,1,2,1,hairLight); p(0,4,3,2,hairMid); p(10,4,3,2,hairMid); p(0,6,2,5,hairDark); p(10,6,2,5,hairDark); p(2,2,10,8,hairDark); p(3,3,8,2,hairMid);
+    p(3,4,8,5,skin); p(3,6,2,2,skin); p(9,6,2,2,skin); p(4,5,3,2,COLORS.white); p(8,5,3,2,COLORS.white); p(7,5,1,1,COLORS.white); p(4,4,1,1,lash); p(9,4,1,1,lash); p(5,6,1,blink ? 1 : 2,COLORS.ink); p(9,6,1,blink ? 1 : 2,COLORS.ink); p(6,7,1,1,skinShade); p(5,8,5,1,cheek); p(6,9,3,1,mouth);
+    p(4,10,8,5,COLORS.shirt); p(2,12,2,4,skin); p(10,10,2,4,skin); p(11,12,2,2,skin); p(4,10,1,1,COLORS.white); p(7,11,1,3,COLORS.white); p(6,12,3,1,COLORS.white); p(5,15,6,2,COLORS.shirt2); p(8,15,2,6,COLORS.pants); p(5,15,2,4,COLORS.pants); p(4,19,2,4,COLORS.pants); p(9,17,2,3,COLORS.pants); p(3,22,4,2,COLORS.shoe); p(8,20,4,2,COLORS.shoe); p(3,23,2,1,COLORS.shoeDark); p(10,21,2,1,COLORS.shoeDark); p(8,17,1,4,COLORS.pants2); p(5,18,1,5,COLORS.pants2);
+  } else if (phase === "jump") {
+    p(2,2,2,2,hairLight); p(3,2,7,1,hairMid); p(10,3,2,1,hairLight); p(0,5,3,2,hairMid); p(10,5,3,2,hairMid); p(0,7,2,5,hairDark); p(10,7,2,5,hairDark); p(2,3,10,8,hairDark); p(3,4,8,2,hairMid);
+    p(3,4,8,5,skin); p(4,5,3,2,COLORS.white); p(8,5,3,2,COLORS.white); p(7,5,1,1,COLORS.white); p(4,4,1,1,lash); p(9,4,1,1,lash); p(5,6,1,blink ? 1 : 2,COLORS.ink); p(9,6,1,blink ? 1 : 2,COLORS.ink); p(6,7,1,1,skinShade); p(5,8,5,1,cheek); p(6,9,3,1,mouth);
+    p(4,10,8,5,COLORS.shirt); p(2,11,2,4,skin); p(10,11,2,4,skin); p(4,10,1,1,COLORS.white); p(7,11,1,3,COLORS.white); p(6,12,3,1,COLORS.white); p(5,15,6,2,COLORS.shirt2); p(5,16,2,4,COLORS.pants); p(8,16,2,4,COLORS.pants); p(4,18,3,2,COLORS.pants2); p(8,18,3,2,COLORS.pants2); p(3,20,4,2,COLORS.shoe); p(8,20,4,2,COLORS.shoe); p(3,21,2,1,COLORS.shoeDark); p(10,21,2,1,COLORS.shoeDark);
+  } else if (phase === "duck-0") {
+    p(2,6,4,2,hairLight); p(10,6,4,2,hairLight); p(0,8,4,2,hairMid); p(12,8,4,2,hairMid); p(1,10,2,3,hairDark); p(13,10,2,3,hairDark); p(4,5,8,1,hairMid); p(3,6,10,1,hairMid); p(2,7,12,6,hairDark); p(3,8,10,4,hairMid); p(4,8,8,4,skin); p(5,7,7,2,hairLight);
+    p(5,9,3,2,COLORS.white); p(9,9,3,2,COLORS.white); p(8,9,1,1,COLORS.white); p(5,8,1,1,lash); p(10,8,1,1,lash); p(6,10,1,1,COLORS.ink); p(10,10,1,1,COLORS.ink); p(7,11,1,1,skinShade); p(6,11,5,1,cheek); p(8,11,2,1,mouth); p(6,12,10,3,COLORS.shirt); p(3,13,3,2,skin); p(13,13,3,2,skin); p(7,12,1,1,COLORS.white); p(10,12,1,2,COLORS.white); p(9,13,3,1,COLORS.white); p(7,15,9,2,COLORS.pants); p(4,16,6,2,COLORS.shoe); p(12,16,6,2,COLORS.shoe); p(4,17,2,1,COLORS.shoeDark); p(16,17,2,1,COLORS.shoeDark);
+  } else {
+    p(2,6,4,2,hairLight); p(10,6,4,2,hairLight); p(1,8,4,2,hairMid); p(11,8,4,2,hairMid); p(1,10,2,3,hairDark); p(13,10,2,3,hairDark); p(4,5,8,1,hairMid); p(3,6,10,1,hairMid); p(2,7,12,6,hairDark); p(3,8,10,4,hairMid); p(4,8,8,4,skin); p(5,7,7,2,hairLight);
+    p(5,9,3,2,COLORS.white); p(9,9,3,2,COLORS.white); p(8,9,1,1,COLORS.white); p(5,8,1,1,lash); p(10,8,1,1,lash); p(6,10,1,1,COLORS.ink); p(10,10,1,1,COLORS.ink); p(7,11,1,1,skinShade); p(6,11,5,1,cheek); p(8,11,2,1,mouth); p(6,12,10,3,COLORS.shirt); p(2,13,3,2,skin); p(13,12,3,2,skin); p(7,12,1,1,COLORS.white); p(10,12,1,2,COLORS.white); p(9,13,3,1,COLORS.white); p(7,15,9,2,COLORS.pants); p(5,16,6,2,COLORS.shoe); p(12,15,6,2,COLORS.shoe); p(5,17,2,1,COLORS.shoeDark); p(16,16,2,1,COLORS.shoeDark);
+  }
+}
+
+function drawChino(ctx: CanvasRenderingContext2D, player: PlayerState, worldTime: number) {
+  const baseX = player.x;
+  const { top, phase } = getRunnerPhase(player, worldTime);
+  const blink = Math.floor(worldTime / 1400) % 9 === 0 && !player.dead;
+  const p = (x: number, y: number, w = 1, h = 1, color: string = COLORS.ink) =>
+    drawRect(ctx, baseX + x, top + y, w, h, color);
+  const skin = "#d8b090";
+  const skinShade = "#b98565";
+  const hairDark = "#403733";
+  const hairMid = "#6d645f";
+  const beard = "#6f6862";
+  const beardLight = "#d8d6d1";
+  const glasses = "#2b3037";
+  const glassesLight = "#a2adbc";
+  const vest = "#17191d";
+  const vestLight = "#30343c";
+  const zipper = "#aab2bc";
+
+  if (phase === "run-0") {
+    p(3,1,7,1,hairMid); p(2,2,9,1,hairDark); p(2,3,9,1,hairDark); p(2,4,9,3,hairDark); p(2,1,2,1,hairMid); p(9,1,2,1,hairMid);
+    p(3,4,7,5,skin); p(2,5,1,2,skin); p(10,5,1,2,skin); p(4,5,2,2,glasses); p(7,5,2,2,glasses); p(6,5,1,1,glasses); p(4,5,1,1,glassesLight); p(7,5,1,1,glassesLight); p(5,6,1,blink ? 1 : 2,COLORS.ink); p(8,6,1,blink ? 1 : 2,COLORS.ink); p(3,9,7,3,beard); p(4,9,5,1,beardLight); p(5,10,3,1,beardLight); p(6,7,1,1,skinShade); p(6,11,2,1,"#a06e67");
+    p(3,10,10,5,COLORS.shirt); p(2,11,2,4,skin); p(11,11,2,4,skin); p(4,10,2,5,vest); p(8,10,2,5,vest); p(6,10,2,3,vestLight); p(6,10,1,5,zipper); p(7,10,1,2,zipper); p(3,15,10,2,COLORS.shirt2); p(4,15,2,2,vest); p(8,15,2,2,vest); p(6,15,1,2,zipper);
+    p(4,15,2,6,COLORS.pants); p(7,15,2,4,COLORS.pants); p(8,19,2,4,COLORS.pants); p(2,17,2,3,COLORS.pants); p(2,20,4,2,COLORS.shoe); p(7,22,4,2,COLORS.shoe); p(1,22,2,1,COLORS.shoeDark); p(9,23,2,1,COLORS.shoeDark); p(5,17,1,4,COLORS.pants2); p(7,18,1,5,COLORS.pants2);
+  } else if (phase === "run-1") {
+    p(3,1,7,1,hairMid); p(2,2,9,1,hairDark); p(2,3,9,1,hairDark); p(2,4,9,3,hairDark); p(2,1,2,1,hairMid); p(9,1,2,1,hairMid);
+    p(3,4,7,5,skin); p(2,5,1,2,skin); p(10,5,1,2,skin); p(4,5,2,2,glasses); p(7,5,2,2,glasses); p(6,5,1,1,glasses); p(4,5,1,1,glassesLight); p(7,5,1,1,glassesLight); p(5,6,1,blink ? 1 : 2,COLORS.ink); p(8,6,1,blink ? 1 : 2,COLORS.ink); p(3,9,7,3,beard); p(4,9,5,1,beardLight); p(6,10,3,1,beardLight); p(6,7,1,1,skinShade); p(6,11,2,1,"#a06e67");
+    p(3,10,10,5,COLORS.shirt); p(1,12,2,4,skin); p(11,10,2,4,skin); p(4,10,2,5,vest); p(8,10,2,5,vest); p(6,10,2,3,vestLight); p(6,10,1,5,zipper); p(7,10,1,2,zipper); p(3,15,10,2,COLORS.shirt2); p(4,15,2,2,vest); p(8,15,2,2,vest); p(6,15,1,2,zipper);
+    p(7,15,2,6,COLORS.pants); p(4,15,2,4,COLORS.pants); p(3,19,2,4,COLORS.pants); p(8,17,2,3,COLORS.pants); p(2,22,4,2,COLORS.shoe); p(7,20,4,2,COLORS.shoe); p(2,23,2,1,COLORS.shoeDark); p(9,21,2,1,COLORS.shoeDark); p(7,17,1,4,COLORS.pants2); p(4,18,1,5,COLORS.pants2);
+  } else if (phase === "jump") {
+    p(3,1,7,1,hairMid); p(2,2,9,1,hairDark); p(2,3,9,1,hairDark); p(2,4,9,3,hairDark); p(2,1,2,1,hairMid); p(9,1,2,1,hairMid);
+    p(3,4,7,5,skin); p(2,5,1,2,skin); p(10,5,1,2,skin); p(4,5,2,2,glasses); p(7,5,2,2,glasses); p(6,5,1,1,glasses); p(4,5,1,1,glassesLight); p(7,5,1,1,glassesLight); p(5,6,1,blink ? 1 : 2,COLORS.ink); p(8,6,1,blink ? 1 : 2,COLORS.ink); p(3,9,7,3,beard); p(4,9,5,1,beardLight); p(5,10,3,1,beardLight); p(6,7,1,1,skinShade); p(6,11,2,1,"#a06e67");
+    p(3,10,10,5,COLORS.shirt); p(1,11,2,4,skin); p(11,11,2,4,skin); p(4,10,2,5,vest); p(8,10,2,5,vest); p(6,10,2,3,vestLight); p(6,10,1,5,zipper); p(7,10,1,2,zipper); p(3,15,10,2,COLORS.shirt2); p(4,15,2,2,vest); p(8,15,2,2,vest); p(6,15,1,2,zipper);
+    p(4,16,2,4,COLORS.pants); p(7,16,2,4,COLORS.pants); p(3,18,3,2,COLORS.pants2); p(7,18,3,2,COLORS.pants2); p(2,20,4,2,COLORS.shoe); p(7,20,4,2,COLORS.shoe); p(2,21,2,1,COLORS.shoeDark); p(9,21,2,1,COLORS.shoeDark);
+  } else if (phase === "duck-0") {
+    p(4,4,7,1,hairDark); p(3,5,9,1,hairDark); p(3,6,9,4,hairDark); p(4,6,2,1,hairMid); p(8,6,2,1,hairMid); p(4,7,7,4,skin); p(5,8,2,1,glasses); p(8,8,2,1,glasses); p(7,8,1,1,glasses); p(5,8,1,1,glassesLight); p(8,8,1,1,glassesLight); p(6,9,1,1,COLORS.ink); p(9,9,1,1,COLORS.ink); p(4,10,7,3,beard); p(5,10,4,1,beardLight); p(6,11,3,1,beardLight); p(7,10,1,1,skinShade);
+    p(5,12,12,3,COLORS.shirt); p(2,13,3,2,skin); p(14,13,3,2,skin); p(6,12,2,3,vest); p(10,12,2,3,vest); p(8,12,2,2,vestLight); p(8,12,1,4,zipper); p(7,15,10,2,COLORS.pants); p(8,15,2,2,vest); p(12,15,2,2,vest); p(9,15,1,2,zipper); p(4,16,6,2,COLORS.shoe); p(12,16,6,2,COLORS.shoe); p(4,17,2,1,COLORS.shoeDark); p(16,17,2,1,COLORS.shoeDark);
+  } else {
+    p(4,4,7,1,hairDark); p(3,5,9,1,hairDark); p(3,6,9,4,hairDark); p(4,6,2,1,hairMid); p(8,6,2,1,hairMid); p(4,7,7,4,skin); p(5,8,2,1,glasses); p(8,8,2,1,glasses); p(7,8,1,1,glasses); p(5,8,1,1,glassesLight); p(8,8,1,1,glassesLight); p(6,9,1,1,COLORS.ink); p(9,9,1,1,COLORS.ink); p(4,10,7,3,beard); p(5,10,4,1,beardLight); p(6,11,3,1,beardLight); p(7,10,1,1,skinShade);
+    p(5,12,12,3,COLORS.shirt); p(1,13,3,2,skin); p(14,12,3,2,skin); p(6,12,2,3,vest); p(10,12,2,3,vest); p(8,12,2,2,vestLight); p(8,12,1,4,zipper); p(7,15,10,2,COLORS.pants); p(8,15,2,2,vest); p(12,15,2,2,vest); p(9,15,1,2,zipper); p(5,16,6,2,COLORS.shoe); p(12,15,6,2,COLORS.shoe); p(5,17,2,1,COLORS.shoeDark); p(16,16,2,1,COLORS.shoeDark);
+  }
+}
+
+function drawGer(ctx: CanvasRenderingContext2D, player: PlayerState, worldTime: number) {
+  const baseX = player.x;
+  const { top, phase } = getRunnerPhase(player, worldTime);
+  const blink = Math.floor(worldTime / 1400) % 9 === 0 && !player.dead;
+  const p = (x: number, y: number, w = 1, h = 1, color: string = COLORS.ink) =>
+    drawRect(ctx, baseX + x, top + y, w, h, color);
+  const skin = "#e4ba9a";
+  const skinShade = "#c88b69";
+  const hairDark = "#5a4f49";
+  const hairLight = "#7d716b";
+  const stubble = "#b8957c";
+  const lip = "#b97f76";
+  const eyeBlue = "#4166d5";
+
+  if (phase === "run-0") {
+    p(3,1,6,1,hairLight); p(2,2,8,1,hairDark); p(2,3,8,1,hairDark); p(2,4,8,2,hairDark);
+    p(3,4,7,5,skin); p(2,5,1,2,skin); p(10,5,1,2,skin);
+    p(4,5,2,1,COLORS.white); p(7,5,2,1,COLORS.white); p(5,6,1,blink ? 1 : 2,eyeBlue); p(8,6,1,blink ? 1 : 2,eyeBlue);
+    p(4,8,5,2,stubble); p(6,7,1,1,skinShade); p(6,9,2,1,lip);
+    p(3,10,10,5,COLORS.shirt); p(4,10,1,1,COLORS.white); p(8,11,1,3,COLORS.white); p(6,12,4,1,COLORS.white); p(2,11,2,4,skin); p(11,11,2,4,skin); p(3,15,10,2,COLORS.shirt2);
+    p(4,15,2,6,COLORS.pants); p(7,15,2,4,COLORS.pants); p(8,19,2,4,COLORS.pants); p(2,17,2,3,COLORS.pants); p(2,20,4,2,COLORS.shoe); p(7,22,4,2,COLORS.shoe); p(1,22,2,1,COLORS.shoeDark); p(9,23,2,1,COLORS.shoeDark); p(5,17,1,4,COLORS.pants2); p(7,18,1,5,COLORS.pants2);
+  } else if (phase === "run-1") {
+    p(3,1,6,1,hairLight); p(2,2,8,1,hairDark); p(2,3,8,1,hairDark); p(2,4,8,2,hairDark);
+    p(3,4,7,5,skin); p(2,5,1,2,skin); p(10,5,1,2,skin);
+    p(4,5,2,1,COLORS.white); p(7,5,2,1,COLORS.white); p(5,6,1,blink ? 1 : 2,eyeBlue); p(8,6,1,blink ? 1 : 2,eyeBlue);
+    p(4,8,5,2,stubble); p(6,7,1,1,skinShade); p(6,9,2,1,lip);
+    p(3,10,10,5,COLORS.shirt); p(4,10,1,1,COLORS.white); p(8,11,1,3,COLORS.white); p(6,12,4,1,COLORS.white); p(1,12,2,4,skin); p(11,10,2,4,skin); p(3,15,10,2,COLORS.shirt2);
+    p(7,15,2,6,COLORS.pants); p(4,15,2,4,COLORS.pants); p(3,19,2,4,COLORS.pants); p(8,17,2,3,COLORS.pants); p(2,22,4,2,COLORS.shoe); p(7,20,4,2,COLORS.shoe); p(2,23,2,1,COLORS.shoeDark); p(9,21,2,1,COLORS.shoeDark); p(7,17,1,4,COLORS.pants2); p(4,18,1,5,COLORS.pants2);
+  } else if (phase === "jump") {
+    p(3,1,6,1,hairLight); p(2,2,8,1,hairDark); p(2,3,8,1,hairDark); p(2,4,8,2,hairDark);
+    p(3,4,7,5,skin); p(2,5,1,2,skin); p(10,5,1,2,skin);
+    p(4,5,2,1,COLORS.white); p(7,5,2,1,COLORS.white); p(5,6,1,blink ? 1 : 2,eyeBlue); p(8,6,1,blink ? 1 : 2,eyeBlue);
+    p(4,8,5,2,stubble); p(6,7,1,1,skinShade); p(6,9,2,1,lip);
+    p(3,10,10,5,COLORS.shirt); p(4,10,1,1,COLORS.white); p(8,11,1,3,COLORS.white); p(6,12,4,1,COLORS.white); p(1,11,2,4,skin); p(11,11,2,4,skin); p(3,15,10,2,COLORS.shirt2);
+    p(4,16,2,4,COLORS.pants); p(7,16,2,4,COLORS.pants); p(3,18,3,2,COLORS.pants2); p(7,18,3,2,COLORS.pants2); p(2,20,4,2,COLORS.shoe); p(7,20,4,2,COLORS.shoe); p(2,21,2,1,COLORS.shoeDark); p(9,21,2,1,COLORS.shoeDark);
+  } else if (phase === "duck-0") {
+    p(3,5,7,1,hairDark); p(2,6,9,1,hairDark); p(2,7,9,3,hairDark); p(3,7,2,1,hairLight); p(8,7,2,1,hairLight);
+    p(3,7,7,4,skin); p(4,8,2,1,COLORS.white); p(7,8,2,1,COLORS.white); p(5,9,1,1,eyeBlue); p(8,9,1,1,eyeBlue); p(5,10,4,2,stubble); p(6,10,1,1,skinShade);
+    p(5,12,12,3,COLORS.shirt); p(7,12,1,1,COLORS.white); p(10,12,1,2,COLORS.white); p(9,13,4,1,COLORS.white); p(2,13,3,2,skin); p(14,13,3,2,skin); p(7,15,10,2,COLORS.pants); p(4,16,6,2,COLORS.shoe); p(12,16,6,2,COLORS.shoe); p(4,17,2,1,COLORS.shoeDark); p(16,17,2,1,COLORS.shoeDark);
+  } else {
+    p(3,5,7,1,hairDark); p(2,6,9,1,hairDark); p(2,7,9,3,hairDark); p(3,7,2,1,hairLight); p(8,7,2,1,hairLight);
+    p(3,7,7,4,skin); p(4,8,2,1,COLORS.white); p(7,8,2,1,COLORS.white); p(5,9,1,1,eyeBlue); p(8,9,1,1,eyeBlue); p(5,10,4,2,stubble); p(6,10,1,1,skinShade);
+    p(5,12,12,3,COLORS.shirt); p(7,12,1,1,COLORS.white); p(10,12,1,2,COLORS.white); p(9,13,4,1,COLORS.white); p(1,13,3,2,skin); p(14,12,3,2,skin); p(7,15,10,2,COLORS.pants); p(5,16,6,2,COLORS.shoe); p(12,15,6,2,COLORS.shoe); p(5,17,2,1,COLORS.shoeDark); p(16,16,2,1,COLORS.shoeDark);
   }
 }
 
@@ -1201,7 +1515,71 @@ function drawRunner(ctx: CanvasRenderingContext2D, player: PlayerState, worldTim
     drawJosefina(ctx, player, worldTime);
     return;
   }
+  if (characterId === "jime") {
+    drawJime(ctx, player, worldTime);
+    return;
+  }
+  if (characterId === "santi") {
+    drawSanti(ctx, player, worldTime);
+    return;
+  }
+  if (characterId === "pablo") {
+    drawPablo(ctx, player, worldTime);
+    return;
+  }
+  if (characterId === "eli") {
+    drawEli(ctx, player, worldTime);
+    return;
+  }
+  if (characterId === "vero") {
+    drawVero(ctx, player, worldTime);
+    return;
+  }
+  if (characterId === "chino") {
+    drawChino(ctx, player, worldTime);
+    return;
+  }
+  if (characterId === "ger") {
+    drawGer(ctx, player, worldTime);
+    return;
+  }
   drawFlor(ctx, player, worldTime);
+}
+
+function RunnerPreview({ characterId, active }: { characterId: string; active: boolean }) {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.imageSmoothingEnabled = false;
+    ctx.save();
+    ctx.scale(3, 3);
+    ctx.translate(0, -114);
+    drawRunner(
+      ctx,
+      {
+        x: 8,
+        rise: 0,
+        vy: 0,
+        ducking: false,
+        dead: false,
+        jumpHeld: false,
+        reachedMinRise: false,
+        speedDrop: false,
+      },
+      2000,
+      characterId
+    );
+    ctx.restore();
+  }, [characterId]);
+
+  return <canvas ref={canvasRef} className={`runner-preview-canvas${active ? " is-active" : ""}`} width={96} height={96} aria-hidden="true" />;
 }
 
 function drawWrappedText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number) {
@@ -1289,37 +1667,7 @@ function drawHud(ctx: CanvasRenderingContext2D, state: GameState) {
 
 function drawQuizOverlay(ctx: CanvasRenderingContext2D, state: GameState) {
   if (!state.activeQuiz) return;
-  const question = QUIZ_QUESTIONS[state.activeQuiz.questionIndex]!;
   drawRect(ctx, 0, 0, W, H, "rgba(2, 6, 23, 0.72)");
-  drawRect(ctx, 28, 26, 304, 128, "rgba(15, 23, 42, 0.96)");
-  drawRect(ctx, 28, 26, 304, 8, "rgba(56, 189, 248, 0.24)");
-  drawRect(ctx, 236, 38, 78, 22, "rgba(56, 189, 248, 0.18)");
-  ctx.fillStyle = "#f8fafc";
-  ctx.font = "bold 8px monospace";
-  ctx.fillText("QUIZ STAR", 44, 44);
-  ctx.font = "bold 10px monospace";
-  ctx.fillText(`${(state.activeQuiz.remainingMs / 1000).toFixed(1)}s`, 248, 52);
-
-  ctx.font = "bold 9px monospace";
-  const lines = drawWrappedText(ctx, question.prompt, 248);
-  lines.forEach((line, index) => {
-    ctx.fillText(line, 44, 72 + index * 11);
-  });
-
-  const baseY = 92 + Math.max(0, lines.length - 1) * 10;
-  question.answers.forEach((answer, index) => {
-    const answerY = baseY + index * 18;
-    drawRect(ctx, 42, answerY - 10, 20, 13, "rgba(56, 189, 248, 0.18)");
-    ctx.font = "bold 8px monospace";
-    ctx.fillStyle = "#7dd3fc";
-    ctx.fillText(`${index + 1}`, 49, answerY - 1);
-    ctx.fillStyle = "#e2e8f0";
-    ctx.fillText(answer, 70, answerY - 1);
-  });
-
-  ctx.fillStyle = "#94a3b8";
-  ctx.font = "7px monospace";
-  ctx.fillText("Agarra la estrella, responde con 1 / 2 / 3 y segui corriendo.", 44, 146);
 }
 
 function drawOverlay(ctx: CanvasRenderingContext2D, state: GameState) {
@@ -1373,12 +1721,22 @@ export default function UshuaiaRunnerFlorPrototype() {
   const keysRef = useRef({ duckHeld: false });
   const stateRef = useRef<GameState>(createInitialState());
   const selectedCharacterRef = useRef("flor");
+  const nicknameRef = useRef("");
+  const submittedScoreRef = useRef<string | null>(null);
 
   const [phase, setPhase] = useState<Phase>("ready");
   const [distance, setDistance] = useState(0);
   const [best, setBest] = useState(0);
   const [score, setScore] = useState(0);
   const [selectedCharacter, setSelectedCharacter] = useState("flor");
+  const [quizUi, setQuizUi] = useState<ActiveQuiz | null>(null);
+  const [nickname, setNickname] = useState("");
+  const [nicknameDraft, setNicknameDraft] = useState("");
+  const [isNicknameModalOpen, setIsNicknameModalOpen] = useState(false);
+  const [leaderboard, setLeaderboard] = useState<LeaderboardRow[]>([]);
+  const [leaderboardLoading, setLeaderboardLoading] = useState(true);
+  const [leaderboardError, setLeaderboardError] = useState("");
+  const [leaderboardStatus, setLeaderboardStatus] = useState("");
 
   useEffect(() => {
     document.title = "Run Flow Run";
@@ -1388,23 +1746,57 @@ export default function UshuaiaRunnerFlorPrototype() {
     selectedCharacterRef.current = selectedCharacter;
   }, [selectedCharacter]);
 
+  useEffect(() => {
+    nicknameRef.current = nickname;
+  }, [nickname]);
+
+  useEffect(() => {
+    const storedNickname = window.localStorage.getItem(NICKNAME_STORAGE_KEY)?.trim() ?? "";
+    if (storedNickname) {
+      setNickname(storedNickname);
+      setNicknameDraft(storedNickname);
+    } else {
+      setIsNicknameModalOpen(true);
+    }
+
+    let cancelled = false;
+    const loadLeaderboard = async () => {
+      setLeaderboardLoading(true);
+      setLeaderboardError("");
+      try {
+        const rows = await fetchTopLeaderboard();
+        if (!cancelled) setLeaderboard(rows);
+      } catch {
+        if (!cancelled) setLeaderboardError("No pudimos cargar el Top 10.");
+      } finally {
+        if (!cancelled) setLeaderboardLoading(false);
+      }
+    };
+
+    void loadLeaderboard();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const syncCanvasResolution = () => {
     const canvas = canvasRef.current;
     const container = containerRef.current;
     if (!canvas || !container) return;
-    const width = container.clientWidth || 1080;
-    const scale = clamp(Math.floor(width / W), 2, 5);
+    const width = Math.max(container.clientWidth || W, 320);
+    const scale = clamp(Math.ceil(width / W), 2, 5);
     renderScaleRef.current = scale;
     canvas.width = W * scale;
     canvas.height = H * scale;
-    canvas.style.width = `${W * scale}px`;
-    canvas.style.height = `${H * scale}px`;
+    canvas.style.width = `${width}px`;
+    canvas.style.height = `${(width * H) / W}px`;
   };
 
   const resumeFromQuiz = () => {
     const state = stateRef.current;
     state.activeQuiz = null;
     state.phase = "running";
+    setQuizUi(null);
     setPhase("running");
   };
 
@@ -1426,6 +1818,7 @@ export default function UshuaiaRunnerFlorPrototype() {
     };
     state.nextQuizQuestionIndex += 1;
     state.phase = "quiz";
+    setQuizUi({ questionIndex, remainingMs: QUIZ_DURATION_MS });
     setPhase("quiz");
   };
 
@@ -1455,13 +1848,20 @@ export default function UshuaiaRunnerFlorPrototype() {
   const resetGame = (startRunning = true) => {
     const bestDistance = Math.max(stateRef.current.bestDistance, stateRef.current.distance);
     stateRef.current = { ...createInitialState(), bestDistance, phase: startRunning ? "running" : "ready" };
+    submittedScoreRef.current = null;
     setBest(Math.floor(bestDistance));
     setDistance(0);
     setScore(0);
+    setQuizUi(null);
     setPhase(startRunning ? "running" : "ready");
   };
 
   const pressJump = () => {
+    if (!nicknameRef.current.trim()) {
+      setNicknameDraft("");
+      setIsNicknameModalOpen(true);
+      return;
+    }
     let state = stateRef.current;
     if (state.phase === "ready") {
       resetGame(true);
@@ -1497,6 +1897,59 @@ export default function UshuaiaRunnerFlorPrototype() {
     if (value && player.rise > 0) setSpeedDrop(player);
     if (!value && state.phase === "ready") player.ducking = false;
   };
+
+  const saveNickname = () => {
+    const nextNickname = nicknameDraft.trim().slice(0, 24);
+    if (!nextNickname) return;
+    window.localStorage.setItem(NICKNAME_STORAGE_KEY, nextNickname);
+    setNickname(nextNickname);
+    setNicknameDraft(nextNickname);
+    setIsNicknameModalOpen(false);
+  };
+
+  useEffect(() => {
+    if (phase !== "gameover") return;
+    const currentNickname = nicknameRef.current.trim();
+    if (!currentNickname) return;
+
+    const state = stateRef.current;
+    const signature = `${currentNickname}:${selectedCharacterRef.current}:${Math.floor(state.distance)}:${state.score}`;
+    if (submittedScoreRef.current === signature) return;
+    submittedScoreRef.current = signature;
+
+    let cancelled = false;
+    const syncLeaderboard = async () => {
+      setLeaderboardStatus("Guardando en el ranking...");
+      setLeaderboardError("");
+      try {
+        const result = await submitBestLeaderboardScore({
+          nickname: currentNickname,
+          character_id: selectedCharacterRef.current,
+          score: state.score,
+          distance: Math.floor(state.distance),
+        });
+        const rows = await fetchTopLeaderboard();
+        if (!cancelled) {
+          setLeaderboard(rows);
+          setLeaderboardStatus(
+            result.status === "kept-existing"
+              ? "Tu mejor corrida anterior sigue arriba."
+              : "Ranking actualizado con tu mejor corrida."
+          );
+        }
+      } catch {
+        if (!cancelled) {
+          setLeaderboardError("No pudimos guardar esta corrida en Supabase.");
+          setLeaderboardStatus("");
+        }
+      }
+    };
+
+    void syncLeaderboard();
+    return () => {
+      cancelled = true;
+    };
+  }, [phase]);
 
   useEffect(() => {
     runSelfChecks();
@@ -1656,6 +2109,10 @@ export default function UshuaiaRunnerFlorPrototype() {
       } else if (state.phase === "quiz") {
         if (state.activeQuiz) {
           state.activeQuiz.remainingMs -= dtMs;
+          setQuizUi({
+            questionIndex: state.activeQuiz.questionIndex,
+            remainingMs: Math.max(0, state.activeQuiz.remainingMs),
+          });
           if (state.activeQuiz.remainingMs <= 0) {
             resolveQuizOutcome("timeout");
           }
@@ -1690,10 +2147,15 @@ export default function UshuaiaRunnerFlorPrototype() {
     return () => cancelAnimationFrame(rafRef.current);
   }, []);
 
+  const activeQuizQuestion = phase === "quiz" && quizUi
+    ? QUIZ_QUESTIONS[quizUi.questionIndex] ?? null
+    : null;
+  const quizTimeRatio = quizUi ? Math.max(0, Math.min(1, quizUi.remainingMs / QUIZ_DURATION_MS)) : 0;
+
   return (
     <div className="app-shell">
       <div className="app-layout">
-        <aside className="sidebar-panel">
+        <section className="top-band">
           <div className="hero-block">
             <img className="hero-logo" src={runFlowRunIcon} alt="Run Flow Run" />
             <p className="hero-copy">
@@ -1701,120 +2163,54 @@ export default function UshuaiaRunnerFlorPrototype() {
             </p>
           </div>
 
-          <div className="section-panel">
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                gap: 12,
-                marginBottom: 14,
-              }}
-            >
+          <div className="picker-band">
+            <div className="picker-head">
               <div>
-                <div style={{ fontSize: 16, fontWeight: 700, color: "#f8fafc" }}>Elegi tu corredor</div>
-                <div style={{ marginTop: 4, fontSize: 12, color: "#94a3b8" }}>Cada agente tiene su propio slot visual.</div>
+                <div className="picker-title">Elegi tu corredor</div>
+                <div className="picker-copy">Cada agente tiene su propio slot visual.</div>
               </div>
-              <div
-                style={{
-                  padding: "6px 10px",
-                  borderRadius: 999,
-                  background: "rgba(56, 189, 248, 0.14)",
-                  border: "1px solid rgba(56, 189, 248, 0.28)",
-                  fontSize: 11,
-                  fontWeight: 700,
-                  letterSpacing: "0.08em",
-                  textTransform: "uppercase",
-                  color: "#7dd3fc",
-                }}
-              >
-                Delver Team
-              </div>
+              <div className="team-chip">Delver Team</div>
             </div>
-            <div className="grid gap-2">
+
+            <div className="runner-picker-row">
               {CHARACTERS.map((character) => {
                 const active = selectedCharacter === character.id;
                 const disabled = character.status !== "available";
                 return (
                   <button
                     key={character.id}
+                    type="button"
                     disabled={disabled}
                     onClick={() => !disabled && setSelectedCharacter(character.id)}
-                    className={`w-full rounded-2xl border px-4 py-3 text-left transition ${disabled ? "border-slate-700 bg-slate-800/40 text-slate-500 cursor-not-allowed" : active ? "border-sky-400 bg-sky-500/10 text-white" : "border-slate-700 bg-slate-800/60 hover:border-slate-500"}`}
-                    style={{
-                      width: "100%",
-                      textAlign: "left",
-                      padding: "14px 16px",
-                      borderRadius: 18,
-                      border: active ? "1px solid #38bdf8" : "1px solid rgba(148, 163, 184, 0.22)",
-                      background: disabled
-                        ? "rgba(30, 41, 59, 0.45)"
-                        : active
-                          ? "linear-gradient(135deg, rgba(14, 165, 233, 0.2), rgba(37, 99, 235, 0.18))"
-                          : "rgba(15, 23, 42, 0.72)",
-                      color: disabled ? "#64748b" : "#f8fafc",
-                      cursor: disabled ? "not-allowed" : "pointer",
-                      boxShadow: active ? "0 14px 28px rgba(14, 165, 233, 0.16)" : "none",
-                    }}
+                    className={`runner-choice ${active ? "is-active" : ""} ${disabled ? "is-disabled" : ""}`}
                   >
-                    <div
-                      className="font-semibold flex items-center justify-between"
-                      style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}
-                    >
-                      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                        <div
-                          style={{
-                            width: 14,
-                            height: 14,
-                            borderRadius: 999,
-                            background: disabled ? "#475569" : active ? "#38bdf8" : "#94a3b8",
-                            boxShadow: active ? "0 0 0 4px rgba(56, 189, 248, 0.18)" : "none",
-                          }}
-                        />
-                        <span style={{ fontSize: 16, fontWeight: 700 }}>{character.name}</span>
-                      </div>
-                      <span
-                        className="text-xs uppercase tracking-widest"
-                        style={{
-                          fontSize: 11,
-                          fontWeight: 700,
-                          letterSpacing: "0.08em",
-                          textTransform: "uppercase",
-                          color: disabled ? "#94a3b8" : active ? "#bae6fd" : "#cbd5e1",
-                        }}
-                      >
-                        {disabled ? "soon" : "ready"}
-                      </span>
-                    </div>
-                    <div
-                      className="text-xs mt-1 text-slate-400"
-                      style={{ marginTop: 8, fontSize: 12, color: disabled ? "#94a3b8" : "#cbd5e1" }}
-                    >
-                      {disabled ? "Reservado para futuros agentes" : "Corredor activo en esta partida"}
-                    </div>
+                    <span className="runner-choice-sprite">
+                      <RunnerPreview characterId={character.id} active={active && !disabled} />
+                    </span>
+                    <span className="runner-choice-name">{character.name}</span>
+                    <span className="runner-choice-state">{disabled ? "soon" : active ? "selected" : "ready"}</span>
                   </button>
                 );
               })}
             </div>
           </div>
 
-          <div className="section-panel">
-            <div className="section-title">Controles</div>
-            <ul className="controls-list">
-              <li><span className="key-chip">Space</span> o <span className="key-chip">Up</span> para saltar</li>
-              <li><span className="key-chip">Down</span> para agacharte o caer mas rapido</li>
-              <li>Un toque corto hace un salto corto y mantenerlo llega al maximo</li>
-              <li>Click en la pantalla para arrancar la corrida</li>
-              <li><span className="key-chip">1</span>, <span className="key-chip">2</span> o <span className="key-chip">3</span> para responder cuando agarres la estrella</li>
-            </ul>
+          <div className="controls-inline">
+            <span className="controls-inline-item"><span className="key-chip">Space / Up</span> saltar</span>
+            <span className="controls-inline-item"><span className="key-chip">Down</span> duck</span>
+            <span className="controls-inline-item"><span className="key-chip">1 / 2 / 3</span> responder quiz</span>
+            <span className="controls-inline-item"><span className="key-chip">Nick</span> {nickname || "pendiente"}</span>
+            <button type="button" className="nickname-trigger" onClick={() => setIsNicknameModalOpen(true)}>
+              Cambiar nick
+            </button>
           </div>
-        </aside>
+        </section>
 
         <main className="game-shell">
           <div className="game-card">
             <div ref={containerRef} className="canvas-frame">
               <div
-                className="relative shrink-0"
+                className="game-stage"
                 style={{
                   position: "relative",
                   display: "inline-block",
@@ -1832,6 +2228,69 @@ export default function UshuaiaRunnerFlorPrototype() {
                   className="block max-w-full h-auto cursor-pointer"
                   style={{ display: "block" }}
                 />
+                {(phase === "running" || phase === "ready") && (
+                  <div className="stage-action-bar">
+                    <button
+                      onMouseDown={pressJump}
+                      onMouseUp={releaseJump}
+                      onMouseLeave={releaseJump}
+                      onTouchStart={(e) => {
+                        e.preventDefault();
+                        pressJump();
+                      }}
+                      onTouchEnd={(e) => {
+                        e.preventDefault();
+                        releaseJump();
+                      }}
+                      className="action-button jump-button"
+                    >
+                      Jump
+                    </button>
+                    <button
+                      onMouseDown={() => setDuck(true)}
+                      onMouseUp={() => setDuck(false)}
+                      onMouseLeave={() => setDuck(false)}
+                      onTouchStart={(e) => {
+                        e.preventDefault();
+                        setDuck(true);
+                      }}
+                      onTouchEnd={(e) => {
+                        e.preventDefault();
+                        setDuck(false);
+                      }}
+                      className="action-button duck-button"
+                    >
+                      Duck
+                    </button>
+                  </div>
+                )}
+                {phase === "quiz" && activeQuizQuestion && (
+                  <div className="quiz-touch-panel">
+                    <div className="quiz-touch-title">Tocá una respuesta</div>
+                    <div className="quiz-touch-header">
+                      <div className="quiz-touch-kicker">Quiz Star</div>
+                      <div className="quiz-touch-timer">{((quizUi?.remainingMs ?? 0) / 1000).toFixed(1)}s</div>
+                    </div>
+                    <div className="quiz-touch-progress">
+                      <div className="quiz-touch-progress-bar" style={{ width: `${quizTimeRatio * 100}%` }} />
+                    </div>
+                    <div className="quiz-touch-question">{activeQuizQuestion.prompt}</div>
+                    <div className="quiz-touch-options">
+                      {activeQuizQuestion.answers.map((answer, index) => (
+                        <button
+                          key={`${activeQuizQuestion.prompt}-${index}`}
+                          type="button"
+                          onClick={() => resolveQuizChoice(index)}
+                          className="quiz-choice-button"
+                        >
+                          <span className="quiz-choice-index">{index + 1}</span>
+                          <span className="quiz-choice-text">{answer}</span>
+                        </button>
+                      ))}
+                    </div>
+                    <div className="quiz-touch-hint">Podes tocar una opcion o usar el teclado con 1 / 2 / 3.</div>
+                  </div>
+                )}
                 {phase === "gameover" && (
                   <div
                     className="absolute inset-0 z-20 flex items-center justify-center bg-slate-950/55"
@@ -1923,7 +2382,7 @@ export default function UshuaiaRunnerFlorPrototype() {
                           cursor: "pointer",
                           boxShadow: "0 12px 30px rgba(56, 189, 248, 0.28)",
                         }}
-                      >
+                  >
                         {"Presion\u00E1 Enter para empezar de nuevo"}
                       </button>
                     </div>
@@ -1931,46 +2390,89 @@ export default function UshuaiaRunnerFlorPrototype() {
                 )}
               </div>
             </div>
-
-            {(phase === "running" || phase === "ready") && (
-              <div className="action-bar">
-                <button
-                onMouseDown={pressJump}
-                onMouseUp={releaseJump}
-                onMouseLeave={releaseJump}
-                onTouchStart={(e) => {
-                  e.preventDefault();
-                  pressJump();
-                }}
-                onTouchEnd={(e) => {
-                  e.preventDefault();
-                  releaseJump();
-                }}
-                className="action-button jump-button"
-              >
-                Jump
-              </button>
-              <button
-                onMouseDown={() => setDuck(true)}
-                onMouseUp={() => setDuck(false)}
-                onMouseLeave={() => setDuck(false)}
-                onTouchStart={(e) => {
-                  e.preventDefault();
-                  setDuck(true);
-                }}
-                onTouchEnd={(e) => {
-                  e.preventDefault();
-                  setDuck(false);
-                }}
-                className="action-button duck-button"
-              >
-                Duck
-              </button>
-              </div>
-            )}
           </div>
+
+          <section className="leaderboard-panel">
+            <div className="leaderboard-head">
+              <div>
+                <div className="leaderboard-title">Top 10 corredores</div>
+                <div className="leaderboard-copy">Ordenado por total de puntos = puntos + distancia.</div>
+              </div>
+              <div className="leaderboard-badge">Supabase Live</div>
+            </div>
+
+            {leaderboardStatus ? <div className="leaderboard-status">{leaderboardStatus}</div> : null}
+            {leaderboardError ? <div className="leaderboard-error">{leaderboardError}</div> : null}
+
+            <div className="leaderboard-table-wrap">
+              <div className="leaderboard-table">
+                <div className="leaderboard-row leaderboard-row-head">
+                  <span>#</span>
+                  <span>Nick</span>
+                  <span>Corredor</span>
+                  <span>Puntos</span>
+                  <span>Distancia</span>
+                  <span>Total</span>
+                </div>
+                {leaderboardLoading ? (
+                  <div className="leaderboard-empty">Cargando ranking...</div>
+                ) : leaderboard.length ? (
+                  leaderboard.map((entry, index) => (
+                    <div key={entry.id} className="leaderboard-row">
+                      <span>{index + 1}</span>
+                      <span>{entry.nickname}</span>
+                      <span>{getCharacterName(entry.character_id)}</span>
+                      <span>{entry.score}</span>
+                      <span>{entry.distance}</span>
+                      <span>{entry.total_points}</span>
+                    </div>
+                  ))
+                ) : (
+                  <div className="leaderboard-empty">Todavia no hay corridas guardadas.</div>
+                )}
+              </div>
+            </div>
+          </section>
         </main>
       </div>
+
+      {isNicknameModalOpen && (
+        <div className="nickname-modal-backdrop">
+          <div className="nickname-modal">
+            <div className="nickname-modal-kicker">Leaderboard</div>
+            <h2 className="nickname-modal-title">Ingresa tu nickname</h2>
+            <p className="nickname-modal-copy">
+              Vamos a guardar tus mejores corridas con tu nick, el corredor elegido, puntos y distancia.
+            </p>
+            <form
+              className="nickname-form"
+              onSubmit={(event) => {
+                event.preventDefault();
+                saveNickname();
+              }}
+            >
+              <input
+                autoFocus
+                maxLength={24}
+                value={nicknameDraft}
+                onChange={(event) => setNicknameDraft(event.target.value)}
+                className="nickname-input"
+                placeholder="Tu nick..."
+              />
+              <div className="nickname-actions">
+                {nickname ? (
+                  <button type="button" className="nickname-secondary" onClick={() => setIsNicknameModalOpen(false)}>
+                    Cancelar
+                  </button>
+                ) : null}
+                <button type="submit" className="nickname-primary" disabled={!nicknameDraft.trim()}>
+                  Guardar
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

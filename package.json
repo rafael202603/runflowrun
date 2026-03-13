@@ -13,6 +13,7 @@
     "serve:dist": "powershell -ExecutionPolicy Bypass -File ./run-local.ps1"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.99.1",
     "react": "^19.1.1",
     "react-dom": "^19.1.1"
   },
