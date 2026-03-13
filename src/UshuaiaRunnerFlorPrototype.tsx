@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import runFlowRunIcon from "./assets/rfr.png";
-import { fetchTopLeaderboard, normalizeNickname, submitBestLeaderboardScore, type LeaderboardRow } from "./lib/leaderboard";
+import { fetchTopLeaderboard, getErrorMessage, normalizeNickname, submitBestLeaderboardScore, type LeaderboardRow } from "./lib/leaderboard";
 
 type ObstacleType = "etios" | "prefectura" | "barrels" | "forklift" | "container" | "suitcase" | "ypfTruck" | "quizStar";
 type Phase = "ready" | "running" | "quiz" | "gameover";
@@ -45,8 +45,10 @@ type ScorePopup = {
   y: number;
   vy: number;
   life: number;
+  totalLife: number;
   text: string;
   color: string;
+  variant?: "default" | "argento";
 };
 
 type QuizQuestion = {
@@ -129,6 +131,8 @@ const QUIZ_SCORE_DELTA = 5000;
 const QUIZ_WRONG_SCORE_DELTA = 2500;
 const QUIZ_TIMEOUT_SCORE_DELTA = 5000;
 const QUIZ_FEEDBACK_DURATION_MS = 950;
+const SCORE_POPUP_DURATION_MS = 2500;
+const HYPER_POWER_FEEDBACK_DURATION_MS = 2500;
 const QUIZ_HYPER_STREAK_TARGET = 1;
 const QUIZ_HYPER_INVULNERABILITY_MS = 5_000;
 const QUIZ_HYPER_WARNING_MS = 2_600;
@@ -734,14 +738,22 @@ function collides(player: PlayerState, obstacle: Obstacle, worldTime: number): b
   return intersectsBox(p, o);
 }
 
-function createScorePopup(text: string, color: string, x = W / 2, y = 74): ScorePopup {
+function createScorePopup(
+  text: string,
+  color: string,
+  x = W / 2,
+  y = 74,
+  variant: ScorePopup["variant"] = "default"
+): ScorePopup {
   return {
     x,
     y,
     vy: -0.32,
-    life: 1150,
+    life: SCORE_POPUP_DURATION_MS,
+    totalLife: SCORE_POPUP_DURATION_MS,
     text,
     color,
+    variant,
   };
 }
 
@@ -901,15 +913,23 @@ function getTopSpecialHealth(specialUnlocks: SpecialUnlocks): SpecialItemKey | n
 }
 
 function getLostSpecialItemText(itemKey: SpecialItemKey) {
-  if (itemKey === "cape") return { text: "PIERDE ESTELA", color: "#74acdf" };
-  if (itemKey === "cap") return { text: "PIERDE GORRA", color: "#7c5cff" };
-  return { text: "PIERDE GAFAS", color: "#f8fafc" };
+  if (itemKey === "cape") return { text: "PIERDE PODER ARGENTO", color: "#74acdf", variant: "default" as const };
+  if (itemKey === "cap") return { text: "PIERDE GORRA", color: "#7c5cff", variant: "default" as const };
+  return { text: "PIERDE GAFAS", color: "#f8fafc", variant: "default" as const };
 }
 
 function getGainedSpecialItemText(itemKey: SpecialItemKey, source: "initial" | "recovery") {
-  if (itemKey === "cape") return { text: source === "recovery" ? "RECUPERA ESTELA" : "GANA ESTELA", color: "#74acdf" };
-  if (itemKey === "cap") return { text: source === "recovery" ? "RECUPERA GORRA" : "GANA GORRA", color: "#7c5cff" };
-  return { text: source === "recovery" ? "RECUPERA GAFAS" : "GANA GAFAS", color: "#f8fafc" };
+  if (itemKey === "cape") {
+    return {
+      text: source === "recovery" ? "RECUPERA PODER ARGENTO" : "GANA PODER ARGENTO",
+      color: "#74acdf",
+      variant: "argento" as const,
+    };
+  }
+  if (itemKey === "cap") {
+    return { text: source === "recovery" ? "RECUPERA GORRA" : "GANA GORRA", color: "#7c5cff", variant: "default" as const };
+  }
+  return { text: source === "recovery" ? "RECUPERA GAFAS" : "GANA GAFAS", color: "#f8fafc", variant: "default" as const };
 }
 
 function launchDistanceCelebration(state: GameState, itemKey: SpecialItemKey, source: "initial" | "recovery") {
@@ -926,7 +946,9 @@ function launchDistanceCelebration(state: GameState, itemKey: SpecialItemKey, so
     );
   }
   const feedback = getGainedSpecialItemText(itemKey, source);
-  state.scorePopups.push(createScorePopup(feedback.text, feedback.color, 58, 48));
+  const popupX = feedback.variant === "argento" ? W / 2 : 58;
+  const popupY = feedback.variant === "argento" ? 48 : 48;
+  state.scorePopups.push(createScorePopup(feedback.text, feedback.color, popupX, popupY, feedback.variant));
 }
 
 function getNextRecoverableSpecialItem(state: GameState): SpecialItemKey | null {
@@ -950,7 +972,7 @@ function absorbObstacleHit(state: GameState) {
   state.player.invulnerableMs = DAMAGE_INVULNERABILITY_MS;
   spawnSpecialItemBurst(state, state.player, lostItem, "loss");
   const feedback = getLostSpecialItemText(lostItem);
-  state.scorePopups.push(createScorePopup(feedback.text, feedback.color));
+  state.scorePopups.push(createScorePopup(feedback.text, feedback.color, W / 2, 74, feedback.variant));
   return true;
 }
 
@@ -998,11 +1020,11 @@ function createQuizFeedback(outcome: QuizOutcome): QuizFeedback {
 function createHyperPowerFeedback(): QuizFeedback {
   return {
     title: "HYPER POWER",
-    pointsText: "10s invulnerable",
+    pointsText: "5s invulnerable",
     color: "#7dd3fc",
     glow: "rgba(139, 92, 246, 0.34)",
-    life: 1200,
-    totalLife: 1200,
+    life: HYPER_POWER_FEEDBACK_DURATION_MS,
+    totalLife: HYPER_POWER_FEEDBACK_DURATION_MS,
   };
 }
 
@@ -2195,17 +2217,43 @@ function drawScorePopups(ctx: CanvasRenderingContext2D, state: GameState) {
   const previousAlign = ctx.textAlign;
   const previousBaseline = ctx.textBaseline;
   const previousAlpha = ctx.globalAlpha;
+  const previousFont = ctx.font;
+  const previousShadowBlur = ctx.shadowBlur;
+  const previousShadowColor = ctx.shadowColor;
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.font = "bold 11px monospace";
   for (const popup of state.scorePopups) {
-    ctx.globalAlpha = clamp(popup.life / 1150, 0, 1);
-    ctx.fillStyle = popup.color;
+    const progress = 1 - popup.life / popup.totalLife;
+    const fadeIn = clamp(progress / 0.14, 0, 1);
+    const fadeOut = clamp(popup.life / (popup.totalLife * 0.42), 0, 1);
+    ctx.globalAlpha = Math.min(fadeIn, fadeOut);
+    if (popup.variant === "argento") {
+      const pulse = 1 + Math.sin(progress * Math.PI * 6) * 0.03;
+      const fontSize = Math.round(13 * pulse);
+      ctx.font = `bold ${fontSize}px monospace`;
+      ctx.shadowBlur = 7;
+      ctx.shadowColor = "rgba(191, 219, 254, 0.7)";
+      ctx.fillStyle = "#f8fbff";
+    } else {
+      ctx.font = "bold 11px monospace";
+      ctx.shadowBlur = 0;
+      ctx.shadowColor = "transparent";
+      ctx.fillStyle = popup.color;
+    }
     ctx.fillText(popup.text, popup.x, popup.y);
+    if (popup.variant === "argento") {
+      ctx.globalAlpha *= 0.85;
+      ctx.fillStyle = "#6bb1fc";
+      ctx.fillText(popup.text, popup.x, popup.y + 1);
+    }
   }
   ctx.globalAlpha = previousAlpha;
   ctx.textAlign = previousAlign;
   ctx.textBaseline = previousBaseline;
+  ctx.font = previousFont;
+  ctx.shadowBlur = previousShadowBlur;
+  ctx.shadowColor = previousShadowColor;
 }
 
 function drawQuizFeedback(ctx: CanvasRenderingContext2D, state: GameState) {
@@ -2359,8 +2407,8 @@ export default function UshuaiaRunnerFlorPrototype() {
       try {
         const rows = await fetchTopLeaderboard();
         if (!cancelled) setLeaderboard(rows);
-      } catch {
-        if (!cancelled) setLeaderboardError("No pudimos cargar el Top 10.");
+      } catch (error) {
+        if (!cancelled) setLeaderboardError(`No pudimos cargar el Top 10. ${getErrorMessage(error)}`);
       } finally {
         if (!cancelled) setLeaderboardLoading(false);
       }
@@ -2548,7 +2596,7 @@ export default function UshuaiaRunnerFlorPrototype() {
         }
       } catch (error) {
         if (!cancelled) {
-          const detail = error instanceof Error ? error.message : "Error desconocido";
+          const detail = getErrorMessage(error);
           setLeaderboardError(`No pudimos guardar esta corrida en Supabase. ${detail}`);
           setLeaderboardStatus("");
         }

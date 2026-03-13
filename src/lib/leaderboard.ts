@@ -1,6 +1,14 @@
-import { supabase } from "./supabase";
+import { supabase, supabaseConfigurationError } from "./supabase";
 
 const LEADERBOARD_TABLE = "runflowrun_leaderboard";
+const POLICY_SCORE_LIMIT_HINT = 50_000;
+
+type SupabaseErrorLike = {
+  code?: string;
+  message?: string;
+  details?: string | null;
+  hint?: string | null;
+};
 
 export type LeaderboardRow = {
   id: number;
@@ -38,11 +46,50 @@ function isBetterRun(nextRun: Pick<LeaderboardRow, "total_points" | "score" | "d
   return nextRun.distance > currentRun.distance;
 }
 
+function getSupabaseErrorLike(error: unknown) {
+  if (!error || typeof error !== "object") return null;
+  return error as SupabaseErrorLike;
+}
+
+function requireSupabase() {
+  if (!supabase) {
+    throw new Error(supabaseConfigurationError);
+  }
+  return supabase;
+}
+
+export function getErrorMessage(error: unknown) {
+  if (error instanceof Error && error.message) return error.message;
+
+  const supabaseError = getSupabaseErrorLike(error);
+  if (!supabaseError) return "Error desconocido";
+
+  const detail = [supabaseError.message, supabaseError.details, supabaseError.hint]
+    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    .join(" ");
+
+  return detail || "Error desconocido";
+}
+
+function describeLeaderboardWriteError(error: unknown, entry: Pick<LeaderboardSubmission, "score">) {
+  const supabaseError = getSupabaseErrorLike(error);
+  const detail = getErrorMessage(error);
+  const looksLikePolicyFailure =
+    supabaseError?.code === "42501" ||
+    /row-level security|permission denied|new row violates/i.test(detail);
+
+  if (looksLikePolicyFailure && entry.score > POLICY_SCORE_LIMIT_HINT) {
+    return `Supabase rechazo la corrida por la policy del leaderboard. Esta corrida tiene ${entry.score} puntos; si tu WITH CHECK sigue en score <= ${POLICY_SCORE_LIMIT_HINT}, hay que ampliarlo.`;
+  }
+
+  return detail;
+}
+
 export async function fetchLeaderboardEntryByNickname(nickname: string) {
   const trimmedNickname = normalizeNickname(nickname);
   if (!trimmedNickname) return null;
 
-  const { data, error } = await supabase
+  const { data, error } = await requireSupabase()
     .from(LEADERBOARD_TABLE)
     .select("id, nickname, character_id, score, distance, total_points, created_at")
     .ilike("nickname", trimmedNickname)
@@ -53,7 +100,7 @@ export async function fetchLeaderboardEntryByNickname(nickname: string) {
 }
 
 export async function fetchTopLeaderboard(limit = 10) {
-  const { data, error } = await supabase
+  const { data, error } = await requireSupabase()
     .from(LEADERBOARD_TABLE)
     .select("id, nickname, character_id, score, distance, total_points, created_at")
     .order("total_points", { ascending: false })
@@ -68,18 +115,20 @@ export async function fetchTopLeaderboard(limit = 10) {
 
 export async function submitLeaderboardScore(entry: LeaderboardSubmission) {
   const sanitized = normalizeSubmission(entry);
+  const client = requireSupabase();
 
-  const { data, error } = await supabase
+  const { data, error } = await client
     .from(LEADERBOARD_TABLE)
     .insert(sanitized)
     .select("id, nickname, character_id, score, distance, total_points, created_at")
     .single();
 
-  if (error) throw error;
+  if (error) throw new Error(describeLeaderboardWriteError(error, sanitized));
   return data as LeaderboardRow;
 }
 
 export async function submitBestLeaderboardScore(entry: LeaderboardSubmission) {
+  const client = requireSupabase();
   const sanitized = normalizeSubmission(entry);
   const nextTotalPoints = sanitized.score + sanitized.distance;
   const existingEntry = await fetchLeaderboardEntryByNickname(sanitized.nickname);
@@ -99,15 +148,15 @@ export async function submitBestLeaderboardScore(entry: LeaderboardSubmission) {
   }
 
   const query = existingEntry
-    ? supabase
+    ? client
         .from(LEADERBOARD_TABLE)
         .update(sanitized)
         .eq("id", existingEntry.id)
-    : supabase.from(LEADERBOARD_TABLE).insert(sanitized);
+    : client.from(LEADERBOARD_TABLE).insert(sanitized);
 
   const { data, error } = await query.select("id, nickname, character_id, score, distance, total_points, created_at").single();
 
-  if (error) throw error;
+  if (error) throw new Error(describeLeaderboardWriteError(error, sanitized));
   return {
     status: existingEntry ? ("updated-best" as const) : ("inserted-best" as const),
     row: data as LeaderboardRow,
