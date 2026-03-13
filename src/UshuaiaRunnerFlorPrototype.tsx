@@ -215,7 +215,7 @@ const CHARACTERS = [
   { id: "jime", name: "Jime", status: "available" },
   { id: "santi", name: "Santi", status: "available" },
   { id: "pablo", name: "Pablo", status: "available" },
-  { id: "eli", name: "Eli", status: "available" },
+  { id: "eli", name: "Eliana", status: "available" },
   { id: "vero", name: "Vero", status: "available" },
   { id: "chino", name: "Chino", status: "available" },
   { id: "ger", name: "Ger", status: "available" },
