@@ -19,9 +19,13 @@ export type LeaderboardSubmission = {
   distance: number;
 };
 
+export function normalizeNickname(nickname: string) {
+  return nickname.trim().toLowerCase().slice(0, 24);
+}
+
 function normalizeSubmission(entry: LeaderboardSubmission) {
   return {
-    nickname: entry.nickname.trim().slice(0, 24),
+    nickname: normalizeNickname(entry.nickname),
     character_id: entry.character_id,
     score: Math.floor(entry.score),
     distance: Math.max(0, Math.floor(entry.distance)),
@@ -35,13 +39,13 @@ function isBetterRun(nextRun: Pick<LeaderboardRow, "total_points" | "score" | "d
 }
 
 export async function fetchLeaderboardEntryByNickname(nickname: string) {
-  const trimmedNickname = nickname.trim().slice(0, 24);
+  const trimmedNickname = normalizeNickname(nickname);
   if (!trimmedNickname) return null;
 
   const { data, error } = await supabase
     .from(LEADERBOARD_TABLE)
     .select("id, nickname, character_id, score, distance, total_points, created_at")
-    .eq("nickname", trimmedNickname)
+    .ilike("nickname", trimmedNickname)
     .maybeSingle();
 
   if (error) throw error;
@@ -94,11 +98,14 @@ export async function submitBestLeaderboardScore(entry: LeaderboardSubmission) {
     return { status: "kept-existing" as const, row: existingEntry };
   }
 
-  const { data, error } = await supabase
-    .from(LEADERBOARD_TABLE)
-    .upsert(sanitized, { onConflict: "nickname" })
-    .select("id, nickname, character_id, score, distance, total_points, created_at")
-    .single();
+  const query = existingEntry
+    ? supabase
+        .from(LEADERBOARD_TABLE)
+        .update(sanitized)
+        .eq("id", existingEntry.id)
+    : supabase.from(LEADERBOARD_TABLE).insert(sanitized);
+
+  const { data, error } = await query.select("id, nickname, character_id, score, distance, total_points, created_at").single();
 
   if (error) throw error;
   return {

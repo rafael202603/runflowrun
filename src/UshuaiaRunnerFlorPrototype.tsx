@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import runFlowRunIcon from "./assets/rfr.png";
-import { fetchTopLeaderboard, submitBestLeaderboardScore, type LeaderboardRow } from "./lib/leaderboard";
+import { fetchTopLeaderboard, normalizeNickname, submitBestLeaderboardScore, type LeaderboardRow } from "./lib/leaderboard";
 
 type ObstacleType = "etios" | "prefectura" | "barrels" | "forklift" | "container" | "suitcase" | "ypfTruck" | "quizStar";
 type Phase = "ready" | "running" | "quiz" | "gameover";
@@ -1751,10 +1751,14 @@ export default function UshuaiaRunnerFlorPrototype() {
   }, [nickname]);
 
   useEffect(() => {
-    const storedNickname = window.localStorage.getItem(NICKNAME_STORAGE_KEY)?.trim() ?? "";
-    if (storedNickname) {
-      setNickname(storedNickname);
-      setNicknameDraft(storedNickname);
+    const storedNickname = window.localStorage.getItem(NICKNAME_STORAGE_KEY) ?? "";
+    const normalizedStoredNickname = normalizeNickname(storedNickname);
+    if (normalizedStoredNickname) {
+      if (normalizedStoredNickname !== storedNickname) {
+        window.localStorage.setItem(NICKNAME_STORAGE_KEY, normalizedStoredNickname);
+      }
+      setNickname(normalizedStoredNickname);
+      setNicknameDraft(normalizedStoredNickname);
     } else {
       setIsNicknameModalOpen(true);
     }
@@ -1899,7 +1903,7 @@ export default function UshuaiaRunnerFlorPrototype() {
   };
 
   const saveNickname = () => {
-    const nextNickname = nicknameDraft.trim().slice(0, 24);
+    const nextNickname = normalizeNickname(nicknameDraft);
     if (!nextNickname) return;
     window.localStorage.setItem(NICKNAME_STORAGE_KEY, nextNickname);
     setNickname(nextNickname);
@@ -1937,9 +1941,10 @@ export default function UshuaiaRunnerFlorPrototype() {
               : "Ranking actualizado con tu mejor corrida."
           );
         }
-      } catch {
+      } catch (error) {
         if (!cancelled) {
-          setLeaderboardError("No pudimos guardar esta corrida en Supabase.");
+          const detail = error instanceof Error ? error.message : "Error desconocido";
+          setLeaderboardError(`No pudimos guardar esta corrida en Supabase. ${detail}`);
           setLeaderboardStatus("");
         }
       }
@@ -2272,7 +2277,7 @@ export default function UshuaiaRunnerFlorPrototype() {
                       <div className="quiz-touch-timer">{((quizUi?.remainingMs ?? 0) / 1000).toFixed(1)}s</div>
                     </div>
                     <div className="quiz-touch-progress">
-                      <div className="quiz-touch-progress-bar" style={{ width: `${quizTimeRatio * 100}%` }} />
+                      <div className="quiz-touch-progress-bar" style={{ transform: `scaleX(${quizTimeRatio})` }} />
                     </div>
                     <div className="quiz-touch-question">{activeQuizQuestion.prompt}</div>
                     <div className="quiz-touch-options">
