@@ -14,6 +14,8 @@ type PlayerState = {
   jumpHeld: boolean;
   reachedMinRise: boolean;
   speedDrop: boolean;
+  invulnerableMs: number;
+  hyperInvulnerableMs: number;
 };
 
 type Obstacle = {
@@ -69,6 +71,10 @@ type QuizFeedback = {
   totalLife: number;
 };
 
+type SpecialItemKey = "glasses" | "cap" | "cape";
+
+type SpecialUnlocks = Record<SpecialItemKey, boolean>;
+
 type GameState = {
   phase: Phase;
   speed: number;
@@ -87,6 +93,10 @@ type GameState = {
   nextQuizQuestionIndex: number;
   scorePopups: ScorePopup[];
   quizFeedback: QuizFeedback | null;
+  specialUnlocks: SpecialUnlocks;
+  specialMilestonesClaimed: SpecialUnlocks;
+  nextSpecialRecoveryDistance: number | null;
+  quizCorrectStreak: number;
 };
 
 const W = 360;
@@ -119,8 +129,25 @@ const QUIZ_SCORE_DELTA = 5000;
 const QUIZ_WRONG_SCORE_DELTA = 2500;
 const QUIZ_TIMEOUT_SCORE_DELTA = 5000;
 const QUIZ_FEEDBACK_DURATION_MS = 950;
+const QUIZ_HYPER_STREAK_TARGET = 1;
+const QUIZ_HYPER_INVULNERABILITY_MS = 5_000;
+const QUIZ_HYPER_WARNING_MS = 2_600;
 const QUIZ_STAR_YPOS = [GROUND_Y - 84, GROUND_Y - 66, GROUND_Y - 48] as const;
 const QUIZ_CONFETTI_COLORS = ["#fde047", "#22c55e", "#38bdf8", "#f97316", "#f472b6"] as const;
+const SPECIAL_ITEM_THRESHOLDS: Record<SpecialItemKey, number> = {
+  glasses: 2500,
+  cap: 5000,
+  cape: 7500,
+};
+const SPECIAL_ITEM_GAIN_ORDER = ["glasses", "cap", "cape"] as const satisfies readonly SpecialItemKey[];
+const SPECIAL_ITEM_LOSS_ORDER = ["cape", "cap", "glasses"] as const satisfies readonly SpecialItemKey[];
+const SPECIAL_ITEM_RECOVERY_DISTANCE = 5000;
+const SPECIAL_ITEM_SPARK_COLORS = ["#ffffff", "#e0f2fe", "#93c5fd", "#fde68a", "#f8fafc"] as const;
+const DAMAGE_INVULNERABILITY_MS = 1350;
+const CAPE_JUMP_VELOCITY_MULTIPLIER = 1;
+const CAPE_MAX_JUMP_RISE_MULTIPLIER = 2.5;
+const CAPE_ASCENT_GRAVITY_MULTIPLIER = 0.18;
+const CAPE_GLIDE_GRAVITY_MULTIPLIER = 0.22;
 
 // Dino uses smaller effective speed on narrower screens.
 const HORIZONTAL_SPEED_SCALE = (W / DINO_DEFAULT_WIDTH) * 1.2;
@@ -136,6 +163,7 @@ const DROP_VELOCITY = BASE_DROP_VELOCITY * VERTICAL_SCALE;
 const SPEED_DROP_COEFFICIENT = BASE_SPEED_DROP_COEFFICIENT;
 const MIN_JUMP_RISE = BASE_MIN_JUMP_HEIGHT * VERTICAL_SCALE;
 const MAX_JUMP_RISE = BASE_MAX_JUMP_HEIGHT * VERTICAL_SCALE;
+const CAPE_GLIDE_MAX_FALL_SPEED = 1.05 * VERTICAL_SCALE;
 const SUITCASE_FLYING_YPOS = DINO_FLYING_YPOS.map((y) => {
   const dinoGroundTop = 93;
   const dinoOffsetFromGroundTop = y - dinoGroundTop;
@@ -429,6 +457,56 @@ function mixColor(from: string, to: string, amount: number) {
   return `rgb(${r}, ${g}, ${b})`;
 }
 
+function parseColorChannels(color: string) {
+  if (color.startsWith("rgba")) {
+    const channels = color.match(/[\d.]+/g)?.map(Number) ?? [0, 0, 0, 1];
+    return {
+      r: channels[0] ?? 0,
+      g: channels[1] ?? 0,
+      b: channels[2] ?? 0,
+      a: channels[3] ?? 1,
+    };
+  }
+  if (color.startsWith("rgb")) {
+    const channels = color.match(/\d+/g)?.map(Number) ?? [0, 0, 0];
+    return {
+      r: channels[0] ?? 0,
+      g: channels[1] ?? 0,
+      b: channels[2] ?? 0,
+      a: 1,
+    };
+  }
+  const rgb = hexToRgb(color);
+  return { ...rgb, a: 1 };
+}
+
+let activeRunnerHyperRender:
+  | {
+      worldTime: number;
+      warning: boolean;
+    }
+  | null = null;
+
+function getHyperPaletteColor(color: string, worldTime: number, x = 0, y = 0) {
+  const { r, g, b, a } = parseColorChannels(color);
+  const luminance = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+  const palettePhase = Math.floor(worldTime / 48) % 6;
+  const palettes = [
+    ["#3a146a", "#7c3aed", "#4fd4ff", "#ffffff"],
+    ["#163eae", "#3b82f6", "#7dd3fc", "#ffffff"],
+    ["#4a1d96", "#8b5cf6", "#d8b4fe", "#ffffff"],
+    ["#0f5bd7", "#38bdf8", "#c4f1ff", "#ffffff"],
+    ["#5b21b6", "#a855f7", "#67e8f9", "#ffffff"],
+    ["#1d4ed8", "#60a5fa", "#e0f2fe", "#ffffff"],
+  ] as const;
+  const palette = palettes[palettePhase]!;
+  const spatialPhase = Math.abs(Math.round(x + y)) % 2;
+  const bucketBase = luminance < 0.12 ? 1 : luminance < 0.34 ? 2 : luminance < 0.7 ? 2 : 3;
+  const bucket = clamp(bucketBase + spatialPhase - (palettePhase % 2 === 0 ? 0 : 1), 0, 3);
+  const mapped = hexToRgb(palette[bucket]!);
+  return `rgba(${mapped.r}, ${mapped.g}, ${mapped.b}, ${a})`;
+}
+
 function getDayNightScene(dayNightTime: number) {
   const progress = (((dayNightTime % DAY_NIGHT_CYCLE_MS) + DAY_NIGHT_CYCLE_MS) % DAY_NIGHT_CYCLE_MS) / DAY_NIGHT_CYCLE_MS;
   const daylight = (Math.cos(progress * Math.PI * 2) + 1) / 2;
@@ -507,6 +585,8 @@ function createInitialState(): GameState {
       jumpHeld: false,
       reachedMinRise: false,
       speedDrop: false,
+      invulnerableMs: 0,
+      hyperInvulnerableMs: 0,
     },
     obstacles: [],
     particles: [],
@@ -515,6 +595,18 @@ function createInitialState(): GameState {
     nextQuizQuestionIndex: 0,
     scorePopups: [],
     quizFeedback: null,
+    specialUnlocks: {
+      glasses: false,
+      cap: false,
+      cape: false,
+    },
+    specialMilestonesClaimed: {
+      glasses: false,
+      cap: false,
+      cape: false,
+    },
+    nextSpecialRecoveryDistance: null,
+    quizCorrectStreak: 0,
   };
 }
 
@@ -616,6 +708,13 @@ function getObstacleHitbox(obstacle: Obstacle, worldTime = 0) {
   }
 }
 
+function intersectsBox(
+  a: { x: number; y: number; w: number; h: number },
+  b: { x: number; y: number; w: number; h: number }
+) {
+  return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+}
+
 function getPlayerMetrics(player: PlayerState) {
   const airborne = player.rise > 0.1;
   const ducking = player.ducking && !airborne;
@@ -628,14 +727,17 @@ function getPlayerMetrics(player: PlayerState) {
 function collides(player: PlayerState, obstacle: Obstacle, worldTime: number): boolean {
   const metrics = getPlayerMetrics(player);
   const p = { x: player.x + 2, y: metrics.top + 2, w: metrics.width - 4, h: metrics.height - 3 };
+  if (obstacle.type === "ypfTruck") {
+    return getTruckCollisionBoxes(obstacle).some((truckBox) => intersectsBox(p, truckBox));
+  }
   const o = getObstacleHitbox(obstacle, worldTime);
-  return p.x < o.x + o.w && p.x + p.w > o.x && p.y < o.y + o.h && p.y + p.h > o.y;
+  return intersectsBox(p, o);
 }
 
-function createScorePopup(text: string, color: string): ScorePopup {
+function createScorePopup(text: string, color: string, x = W / 2, y = 74): ScorePopup {
   return {
-    x: W / 2,
-    y: 74,
+    x,
+    y,
     vy: -0.32,
     life: 1150,
     text,
@@ -651,8 +753,35 @@ function updateScorePopups(scorePopups: ScorePopup[], elapsedMs: number, dt: num
   return scorePopups.filter((popup) => popup.life > 0);
 }
 
-function getTruckPlatform(obstacle: Obstacle) {
-  return { x: obstacle.x + 14, y: obstacle.baseY + 1, w: 84, h: 4 };
+function getTruckPlatforms(obstacle: Obstacle) {
+  const y = getAnimatedObstacleY(obstacle, 0);
+  return [
+    { x: obstacle.x + 8, y: y + 2, w: 88, h: 5 },
+    { x: obstacle.x + 96, y: y + 8, w: 31, h: 5 },
+  ];
+}
+
+function isPlayerStandingOnTruck(player: PlayerState, obstacles: Obstacle[]) {
+  const metrics = getPlayerMetrics(player);
+  const playerBox = { x: player.x + 2, y: metrics.top + 2, w: metrics.width - 4, h: metrics.height - 3 };
+  const feetY = playerBox.y + playerBox.h;
+  return obstacles.some((obstacle) => {
+    if (obstacle.type !== "ypfTruck") return false;
+    return getTruckPlatforms(obstacle).some((platform) => {
+      const overlapsX = playerBox.x + playerBox.w > platform.x + 2 && playerBox.x < platform.x + platform.w - 2;
+      const isStandingHeight = Math.abs(feetY - platform.y) <= 3;
+      return overlapsX && player.vy === 0 && isStandingHeight;
+    });
+  });
+}
+
+function getTruckCollisionBoxes(obstacle: Obstacle) {
+  const y = getAnimatedObstacleY(obstacle, 0);
+  return [
+    { x: obstacle.x + 8, y: y + 7, w: 88, h: 20 },
+    { x: obstacle.x + 92, y: y + 15, w: 8, h: 12 },
+    { x: obstacle.x + 96, y: y + 13, w: 31, h: 15 },
+  ];
 }
 
 function settlePlayerOnTruck(player: PlayerState, obstacles: Obstacle[], previousBottom: number): boolean {
@@ -661,17 +790,18 @@ function settlePlayerOnTruck(player: PlayerState, obstacles: Obstacle[], previou
   const feetY = playerBox.y + playerBox.h;
   for (const obstacle of obstacles) {
     if (obstacle.type !== "ypfTruck") continue;
-    const platform = getTruckPlatform(obstacle);
-    const overlapsX = playerBox.x + playerBox.w > platform.x + 2 && playerBox.x < platform.x + platform.w - 2;
-    const cameFromAbove = previousBottom <= platform.y + 2;
-    const canLandNow = feetY >= platform.y && feetY <= platform.y + 8;
-    if (overlapsX && player.vy >= 0 && cameFromAbove && canLandNow) {
-      player.rise = GROUND_Y - platform.y;
-      player.vy = 0;
-      player.jumpHeld = false;
-      player.reachedMinRise = true;
-      player.speedDrop = false;
-      return true;
+    for (const platform of getTruckPlatforms(obstacle)) {
+      const overlapsX = playerBox.x + playerBox.w > platform.x + 2 && playerBox.x < platform.x + platform.w - 2;
+      const cameFromAbove = previousBottom <= platform.y + 2;
+      const canLandNow = feetY >= platform.y && feetY <= platform.y + 8;
+      if (overlapsX && player.vy >= 0 && cameFromAbove && canLandNow) {
+        player.rise = GROUND_Y - platform.y;
+        player.vy = 0;
+        player.jumpHeld = false;
+        player.reachedMinRise = true;
+        player.speedDrop = false;
+        return true;
+      }
     }
   }
   return false;
@@ -698,6 +828,137 @@ function makeConfettiParticle(x: number, y: number, color: string): Particle {
     size: 2 + Math.floor(Math.random() * 2),
     color,
     gravity: 0.16,
+  };
+}
+
+function makeSpecialSparkParticle(x: number, y: number, color: string): Particle {
+  return {
+    x,
+    y,
+    vx: (Math.random() - 0.5) * 4.2,
+    vy: -(1.1 + Math.random() * 2.1),
+    life: 280 + Math.random() * 220,
+    size: 1 + Math.floor(Math.random() * 2),
+    color,
+    gravity: 0.08,
+  };
+}
+
+function makeTrailDustParticle(x: number, y: number, color: string): Particle {
+  return {
+    x,
+    y,
+    vx: -(0.8 + Math.random() * 1.6),
+    vy: (Math.random() - 0.5) * 0.8 - 0.2,
+    life: 170 + Math.random() * 120,
+    size: 1 + Math.floor(Math.random() * 2),
+    color,
+    gravity: 0.02,
+  };
+}
+
+function getSpecialItemBurstColors(itemKey: SpecialItemKey, mode: "unlock" | "loss" = "unlock") {
+  if (itemKey === "cape") {
+    return mode === "loss"
+      ? (["#74acdf", "#f8fbff", "#cfe8ff", "#9bd0ff", "#ffffff"] as const)
+      : SPECIAL_ITEM_SPARK_COLORS;
+  }
+  if (itemKey === "cap") {
+    return ["#6f6dff", "#7c5cff", "#4f7dff", "#d8d4ff", "#ffffff"] as const;
+  }
+  return ["#ffffff", "#edf2f7", "#d6dde8", "#aeb8c6", "#111318"] as const;
+}
+
+function spawnSpecialItemBurst(
+  state: GameState,
+  player: PlayerState,
+  itemKey: SpecialItemKey,
+  mode: "unlock" | "loss" = "unlock"
+) {
+  const metrics = getPlayerMetrics(player);
+  const originX = player.x + (metrics.ducking ? 9 : 7);
+  const originY = metrics.top + (metrics.ducking ? 10 : 6);
+  const particleCount = mode === "loss" ? (itemKey === "cape" ? 34 : 22) : itemKey === "cape" ? 24 : 16;
+  const colors = getSpecialItemBurstColors(itemKey, mode);
+  for (let index = 0; index < particleCount; index += 1) {
+    const spreadX = (Math.random() - 0.5) * (mode === "loss" ? (itemKey === "cape" ? 20 : 14) : itemKey === "cape" ? 14 : 10);
+    const spreadY = (Math.random() - 0.5) * (mode === "loss" ? (itemKey === "cape" ? 18 : 12) : itemKey === "cape" ? 16 : 10);
+    state.particles.push(
+      makeSpecialSparkParticle(
+        originX + spreadX,
+        originY + spreadY,
+        pick([...colors])
+      )
+    );
+  }
+}
+
+function getTopSpecialHealth(specialUnlocks: SpecialUnlocks): SpecialItemKey | null {
+  for (const itemKey of SPECIAL_ITEM_LOSS_ORDER) {
+    if (specialUnlocks[itemKey]) return itemKey;
+  }
+  return null;
+}
+
+function getLostSpecialItemText(itemKey: SpecialItemKey) {
+  if (itemKey === "cape") return { text: "PIERDE ESTELA", color: "#74acdf" };
+  if (itemKey === "cap") return { text: "PIERDE GORRA", color: "#7c5cff" };
+  return { text: "PIERDE GAFAS", color: "#f8fafc" };
+}
+
+function getGainedSpecialItemText(itemKey: SpecialItemKey, source: "initial" | "recovery") {
+  if (itemKey === "cape") return { text: source === "recovery" ? "RECUPERA ESTELA" : "GANA ESTELA", color: "#74acdf" };
+  if (itemKey === "cap") return { text: source === "recovery" ? "RECUPERA GORRA" : "GANA GORRA", color: "#7c5cff" };
+  return { text: source === "recovery" ? "RECUPERA GAFAS" : "GANA GAFAS", color: "#f8fafc" };
+}
+
+function launchDistanceCelebration(state: GameState, itemKey: SpecialItemKey, source: "initial" | "recovery") {
+  const originX = 52;
+  const originY = 20;
+  const colors = getSpecialItemBurstColors(itemKey, "unlock");
+  for (let index = 0; index < 18; index += 1) {
+    state.particles.push(
+      makeConfettiParticle(
+        originX + (Math.random() - 0.5) * 14,
+        originY + (Math.random() - 0.5) * 6,
+        pick([...colors])
+      )
+    );
+  }
+  const feedback = getGainedSpecialItemText(itemKey, source);
+  state.scorePopups.push(createScorePopup(feedback.text, feedback.color, 58, 48));
+}
+
+function getNextRecoverableSpecialItem(state: GameState): SpecialItemKey | null {
+  for (const itemKey of SPECIAL_ITEM_GAIN_ORDER) {
+    if (state.specialMilestonesClaimed[itemKey] && !state.specialUnlocks[itemKey]) return itemKey;
+  }
+  return null;
+}
+
+function grantSpecialItem(state: GameState, itemKey: SpecialItemKey, source: "initial" | "recovery") {
+  state.specialUnlocks[itemKey] = true;
+  spawnSpecialItemBurst(state, state.player, itemKey);
+  launchDistanceCelebration(state, itemKey, source);
+}
+
+function absorbObstacleHit(state: GameState) {
+  const lostItem = getTopSpecialHealth(state.specialUnlocks);
+  if (!lostItem) return false;
+  state.specialUnlocks[lostItem] = false;
+  state.nextSpecialRecoveryDistance = state.distance + SPECIAL_ITEM_RECOVERY_DISTANCE;
+  state.player.invulnerableMs = DAMAGE_INVULNERABILITY_MS;
+  spawnSpecialItemBurst(state, state.player, lostItem, "loss");
+  const feedback = getLostSpecialItemText(lostItem);
+  state.scorePopups.push(createScorePopup(feedback.text, feedback.color));
+  return true;
+}
+
+function getSpecialTrailEmitterPosition(player: PlayerState, worldTime: number) {
+  const { top, ducking } = getRunnerPhase(player, worldTime);
+  return {
+    x: player.x + (ducking ? 4 : 3),
+    y: top + (ducking ? 11 : 10),
   };
 }
 
@@ -734,10 +995,30 @@ function createQuizFeedback(outcome: QuizOutcome): QuizFeedback {
   };
 }
 
+function createHyperPowerFeedback(): QuizFeedback {
+  return {
+    title: "HYPER POWER",
+    pointsText: "10s invulnerable",
+    color: "#7dd3fc",
+    glow: "rgba(139, 92, 246, 0.34)",
+    life: 1200,
+    totalLife: 1200,
+  };
+}
+
 function updateQuizFeedback(quizFeedback: QuizFeedback | null, elapsedMs: number) {
   if (!quizFeedback) return null;
   quizFeedback.life -= elapsedMs;
   return quizFeedback.life > 0 ? quizFeedback : null;
+}
+
+function activateQuizHyperMode(state: GameState) {
+  if (state.player.hyperInvulnerableMs > 0) return;
+  state.player.hyperInvulnerableMs = QUIZ_HYPER_INVULNERABILITY_MS;
+  state.quizFeedback = createHyperPowerFeedback();
+  spawnSpecialItemBurst(state, state.player, "cape", "unlock");
+  spawnSpecialItemBurst(state, state.player, "cap", "unlock");
+  state.scorePopups.push(createScorePopup("HYPER!", "#7dd3fc"));
 }
 
 function launchQuizConfetti(state: GameState, title: string) {
@@ -758,6 +1039,15 @@ function startJumpVelocity(speed: number): number {
   return INITIAL_JUMP_VELOCITY - (speed / 10) * VERTICAL_SCALE;
 }
 
+function getJumpLaunchVelocity(speed: number, hasCapePower: boolean) {
+  const launchVelocity = startJumpVelocity(speed);
+  return hasCapePower ? launchVelocity * CAPE_JUMP_VELOCITY_MULTIPLIER : launchVelocity;
+}
+
+function getJumpMaxRise(hasCapePower: boolean) {
+  return hasCapePower ? MAX_JUMP_RISE * CAPE_MAX_JUMP_RISE_MULTIPLIER : MAX_JUMP_RISE;
+}
+
 function endJump(player: PlayerState) {
   if (player.reachedMinRise && player.vy < DROP_VELOCITY) {
     player.vy = DROP_VELOCITY;
@@ -770,7 +1060,9 @@ function setSpeedDrop(player: PlayerState) {
 }
 
 function drawRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, color: string) {
-  ctx.fillStyle = color;
+  const hyperState = activeRunnerHyperRender;
+  const shouldUseHyper = hyperState && (!hyperState.warning || Math.sin(hyperState.worldTime * 0.1) > -0.18);
+  ctx.fillStyle = shouldUseHyper && hyperState ? getHyperPaletteColor(color, hyperState.worldTime, x, y) : color;
   ctx.fillRect(Math.round(x), Math.round(y), Math.round(w), Math.round(h));
 }
 
@@ -1701,52 +1993,144 @@ function drawGer(ctx: CanvasRenderingContext2D, player: PlayerState, worldTime: 
   }
 }
 
-function drawRunner(ctx: CanvasRenderingContext2D, player: PlayerState, worldTime: number, characterId: string) {
+function drawSpecialCape(ctx: CanvasRenderingContext2D, player: PlayerState, worldTime: number) {
+  const emitter = getSpecialTrailEmitterPosition(player, worldTime);
+  const pulse = Math.sin(worldTime * 0.04) > 0 ? 1 : 0;
+  drawRect(ctx, emitter.x, emitter.y + 1, 2, 4, "rgba(116, 172, 223, 0.72)");
+  drawRect(ctx, emitter.x - 1, emitter.y + 2, 1, 2, "rgba(248, 251, 255, 0.8)");
+  if (pulse) {
+    drawRect(ctx, emitter.x - 2, emitter.y + 2, 1, 1, "rgba(248, 251, 255, 0.7)");
+  }
+}
+
+function drawSpecialGlasses(ctx: CanvasRenderingContext2D, player: PlayerState, worldTime: number) {
+  const { top, ducking } = getRunnerPhase(player, worldTime);
+  const baseY = top + (ducking ? 8 : 5);
+  const baseX = player.x + (ducking ? 3 : 2);
+  const shine = Math.sin(worldTime * 0.018) > 0.72;
+  const lensColor = "#0b0b0c";
+  const frameColor = "#121316";
+  drawRect(ctx, baseX + 1, baseY, 5, 1, frameColor);
+  drawRect(ctx, baseX + 7, baseY, 5, 1, frameColor);
+  drawRect(ctx, baseX + 1, baseY + 1, 5, 2, lensColor);
+  drawRect(ctx, baseX + 7, baseY + 1, 5, 2, lensColor);
+  drawRect(ctx, baseX + 2, baseY + 3, 3, 1, lensColor);
+  drawRect(ctx, baseX + 8, baseY + 3, 3, 1, lensColor);
+  drawRect(ctx, baseX + 6, baseY + 1, 1, 1, frameColor);
+  drawRect(ctx, baseX, baseY + 1, 1, 1, frameColor);
+  drawRect(ctx, baseX + 12, baseY + 1, 1, 1, frameColor);
+  drawRect(ctx, baseX + 2, baseY - 1, 3, 1, frameColor);
+  drawRect(ctx, baseX + 8, baseY - 1, 3, 1, frameColor);
+  if (shine) {
+    drawRect(ctx, baseX + 2, baseY + 1, 1, 2, "#f8fafc");
+    drawRect(ctx, baseX + 8, baseY + 1, 1, 2, "#f8fafc");
+  }
+}
+
+function drawSpecialCap(ctx: CanvasRenderingContext2D, player: PlayerState, worldTime: number) {
+  const { top, ducking } = getRunnerPhase(player, worldTime);
+  const sway = Math.round(Math.sin(worldTime * 0.018) * 0.35);
+  const capX = player.x + (ducking ? 2 : 1);
+  const capY = top + (ducking ? 0 : -4) + sway;
+  const glowPulse = (Math.sin(worldTime * 0.016) + 1) / 2;
+  const capBlue = mixColor("#143a72", "#5d3ec9", glowPulse * 0.46);
+  const capMid = mixColor("#10325f", "#4c33aa", glowPulse * 0.42);
+  const capShade = mixColor("#0a2548", "#322069", glowPulse * 0.38);
+  const brimTop = mixColor("#12345f", "#4d33ad", glowPulse * 0.44);
+  const brimBottom = mixColor("#091d39", "#28184e", glowPulse * 0.34);
+
+  drawRect(ctx, capX + 5, capY, 5, 1, capBlue);
+  drawRect(ctx, capX + 3, capY + 1, 9, 2, capBlue);
+  drawRect(ctx, capX + 2, capY + 3, 11, 3, capMid);
+  drawRect(ctx, capX + 3, capY + 6, 9, 1, capShade);
+  drawRect(ctx, capX + 7, capY + 1, 1, 6, capShade);
+  drawRect(ctx, capX + 10, capY + 3, 1, 2, capShade);
+  drawRect(ctx, capX + 4, capY + 3, 1, 2, capShade);
+  drawRect(ctx, capX + 6, capY - 1, 2, 1, mixColor("#1d4d90", "#7c5cff", glowPulse * 0.3));
+
+  drawRect(ctx, capX + 8, capY + 6, 8, 1, brimTop);
+  drawRect(ctx, capX + 10, capY + 7, 7, 1, brimTop);
+  drawRect(ctx, capX + 12, capY + 8, 5, 1, brimBottom);
+  drawRect(ctx, capX + 14, capY + 9, 2, 1, brimBottom);
+  drawRect(ctx, capX + 8, capY + 6, 1, 1, "#173f78");
+}
+
+function drawRunnerSpecials(
+  ctx: CanvasRenderingContext2D,
+  player: PlayerState,
+  worldTime: number,
+  specialUnlocks: SpecialUnlocks
+) {
+  if (specialUnlocks.cape) drawSpecialCape(ctx, player, worldTime);
+  if (specialUnlocks.glasses) drawSpecialGlasses(ctx, player, worldTime);
+  if (specialUnlocks.cap) drawSpecialCap(ctx, player, worldTime);
+}
+
+function drawRunnerCore(
+  ctx: CanvasRenderingContext2D,
+  player: PlayerState,
+  worldTime: number,
+  characterId: string,
+  specialUnlocks: SpecialUnlocks = { glasses: false, cap: false, cape: false }
+) {
+  if (specialUnlocks.cape) drawSpecialCape(ctx, player, worldTime);
   if (characterId === "rocio") {
     drawRocio(ctx, player, worldTime);
-    return;
-  }
-  if (characterId === "lucas") {
+  } else if (characterId === "lucas") {
     drawLucas(ctx, player, worldTime);
-    return;
-  }
-  if (characterId === "nico") {
+  } else if (characterId === "nico") {
     drawNico(ctx, player, worldTime);
-    return;
-  }
-  if (characterId === "josefina") {
+  } else if (characterId === "josefina") {
     drawJosefina(ctx, player, worldTime);
-    return;
-  }
-  if (characterId === "jime") {
+  } else if (characterId === "jime") {
     drawJime(ctx, player, worldTime);
-    return;
-  }
-  if (characterId === "santi") {
+  } else if (characterId === "santi") {
     drawSanti(ctx, player, worldTime);
-    return;
-  }
-  if (characterId === "pablo") {
+  } else if (characterId === "pablo") {
     drawPablo(ctx, player, worldTime);
-    return;
-  }
-  if (characterId === "eli") {
+  } else if (characterId === "eli") {
     drawEli(ctx, player, worldTime);
-    return;
-  }
-  if (characterId === "vero") {
+  } else if (characterId === "vero") {
     drawVero(ctx, player, worldTime);
-    return;
-  }
-  if (characterId === "chino") {
+  } else if (characterId === "chino") {
     drawChino(ctx, player, worldTime);
-    return;
-  }
-  if (characterId === "ger") {
+  } else if (characterId === "ger") {
     drawGer(ctx, player, worldTime);
-    return;
+  } else {
+    drawFlor(ctx, player, worldTime);
   }
-  drawFlor(ctx, player, worldTime);
+  if (specialUnlocks.cap || specialUnlocks.glasses) drawRunnerSpecials(ctx, player, worldTime, { ...specialUnlocks, cape: false });
+}
+
+function drawRunner(
+  ctx: CanvasRenderingContext2D,
+  player: PlayerState,
+  worldTime: number,
+  characterId: string,
+  specialUnlocks: SpecialUnlocks = { glasses: false, cap: false, cape: false }
+) {
+  const previousAlpha = ctx.globalAlpha;
+  const damageInvulnerable = player.invulnerableMs > 0;
+  const hyperInvulnerable = player.hyperInvulnerableMs > 0;
+  if (damageInvulnerable) {
+    ctx.globalAlpha = Math.sin(worldTime * 0.05) > 0 ? 0.38 : 0.96;
+  }
+  activeRunnerHyperRender = hyperInvulnerable
+    ? {
+        worldTime,
+        warning: player.hyperInvulnerableMs <= QUIZ_HYPER_WARNING_MS,
+      }
+    : null;
+  drawRunnerCore(ctx, player, worldTime, characterId, specialUnlocks);
+  activeRunnerHyperRender = null;
+  if (player.invulnerableMs > 0) {
+    const { top } = getRunnerPhase(player, worldTime);
+    const shimmer = Math.sin(worldTime * 0.042) > 0 ? "#f8fbff" : "#74acdf";
+    drawRect(ctx, player.x - 2, top + 4, 1, 1, shimmer);
+    drawRect(ctx, player.x + 14, top + 7, 1, 1, "#ffffff");
+    drawRect(ctx, player.x + 6, top - 2, 1, 1, "#dbeafe");
+  }
+  ctx.globalAlpha = previousAlpha;
 }
 
 function RunnerPreview({ characterId, active }: { characterId: string; active: boolean }) {
@@ -1775,6 +2159,8 @@ function RunnerPreview({ characterId, active }: { characterId: string; active: b
         jumpHeld: false,
         reachedMinRise: false,
         speedDrop: false,
+        invulnerableMs: 0,
+        hyperInvulnerableMs: 0,
       },
       2000,
       characterId
@@ -2039,8 +2425,18 @@ export default function UshuaiaRunnerFlorPrototype() {
           ? -QUIZ_WRONG_SCORE_DELTA
           : -QUIZ_TIMEOUT_SCORE_DELTA;
     state.score += delta;
-    state.quizFeedback = createQuizFeedback(outcome);
-    if (outcome === "correct") launchQuizConfetti(state, state.quizFeedback.title);
+    if (outcome === "correct") {
+      state.quizCorrectStreak += 1;
+      state.quizFeedback = createQuizFeedback(outcome);
+      launchQuizConfetti(state, state.quizFeedback.title);
+      if (state.quizCorrectStreak >= QUIZ_HYPER_STREAK_TARGET) {
+        state.quizCorrectStreak = 0;
+        activateQuizHyperMode(state);
+      }
+    } else {
+      state.quizCorrectStreak = 0;
+      state.quizFeedback = createQuizFeedback(outcome);
+    }
     setScore(state.score);
     resumeFromQuiz();
   };
@@ -2075,16 +2471,21 @@ export default function UshuaiaRunnerFlorPrototype() {
       resetGame(true);
       state = stateRef.current;
     }
-    if (state.phase === "gameover" || state.phase === "quiz") return;
-    const player = state.player;
-    if (player.rise <= 0.01) {
-      player.vy = startJumpVelocity(state.speed);
-      player.rise = 0.1;
-      player.ducking = false;
-      player.jumpHeld = true;
-      player.reachedMinRise = false;
-      player.speedDrop = false;
-    }
+  if (state.phase === "gameover" || state.phase === "quiz") return;
+  const player = state.player;
+  if (state.specialUnlocks.cape && player.rise > 0.01 && player.vy > 0 && !player.speedDrop) {
+    player.jumpHeld = true;
+    return;
+  }
+  const onTruckSurface = isPlayerStandingOnTruck(player, state.obstacles);
+  if (player.rise <= 0.01 || onTruckSurface) {
+    player.vy = getJumpLaunchVelocity(state.speed, state.specialUnlocks.cape);
+    player.rise = Math.max(player.rise, 0.1);
+    player.ducking = false;
+    player.jumpHeld = true;
+    player.reachedMinRise = false;
+    player.speedDrop = false;
+  }
   };
 
   const releaseJump = () => {
@@ -2235,16 +2636,88 @@ export default function UshuaiaRunnerFlorPrototype() {
         state.distance += state.speed * (dtMs / FRAME_MS);
 
         const player = state.player;
+        player.invulnerableMs = Math.max(0, player.invulnerableMs - dtMs);
+        player.hyperInvulnerableMs = Math.max(0, player.hyperInvulnerableMs - dtMs);
+        SPECIAL_ITEM_GAIN_ORDER.forEach((itemKey) => {
+          const threshold = SPECIAL_ITEM_THRESHOLDS[itemKey];
+          if (!state.specialMilestonesClaimed[itemKey] && state.distance >= threshold) {
+            state.specialMilestonesClaimed[itemKey] = true;
+            grantSpecialItem(state, itemKey, "initial");
+          }
+        });
+        if (state.nextSpecialRecoveryDistance !== null && state.distance >= state.nextSpecialRecoveryDistance) {
+          const nextRecoverable = getNextRecoverableSpecialItem(state);
+          if (nextRecoverable) {
+            grantSpecialItem(state, nextRecoverable, "recovery");
+            const stillMissing = getNextRecoverableSpecialItem(state);
+            state.nextSpecialRecoveryDistance = stillMissing ? state.distance + SPECIAL_ITEM_RECOVERY_DISTANCE : null;
+          } else {
+            state.nextSpecialRecoveryDistance = null;
+          }
+        }
+        if (state.specialUnlocks.cape && Math.random() < 1.25 * dt) {
+          const emitter = getSpecialTrailEmitterPosition(player, state.worldTime);
+          const wave = Math.sin(state.worldTime * 0.028);
+          const bands = [
+            { yOffset: -2 + wave * 0.8, color: "#74acdf" },
+            { yOffset: 1, color: "#f8fbff" },
+            { yOffset: 4 - wave * 0.8, color: "#74acdf" },
+          ] as const;
+          bands.forEach((band, index) => {
+            const count = index === 1 ? 2 : 1;
+            for (let particleIndex = 0; particleIndex < count; particleIndex += 1) {
+              state.particles.push(
+                makeTrailDustParticle(
+                  emitter.x + Math.random() * 1.5,
+                  emitter.y + band.yOffset + (Math.random() - 0.5) * 0.8,
+                  band.color
+                )
+              );
+            }
+          });
+        }
+        if (player.hyperInvulnerableMs > 0 && Math.random() < 1.7 * dt) {
+          const emitter = getSpecialTrailEmitterPosition(player, state.worldTime);
+          const wave = Math.sin(state.worldTime * 0.034);
+          const bands = [
+            { yOffset: -4 + wave * 1.4, color: getHyperPaletteColor("#2d1270", state.worldTime) },
+            { yOffset: -1 + wave * 0.7, color: getHyperPaletteColor("#67e8f9", state.worldTime + 40) },
+            { yOffset: 2, color: getHyperPaletteColor("#ffffff", state.worldTime + 80) },
+            { yOffset: 5 - wave * 0.9, color: getHyperPaletteColor("#8b5cf6", state.worldTime + 120) },
+          ] as const;
+          bands.forEach((band, index) => {
+            const count = index === 1 || index === 2 ? 2 : 1;
+            for (let particleIndex = 0; particleIndex < count; particleIndex += 1) {
+              state.particles.push(
+                makeTrailDustParticle(
+                  emitter.x + 1 + Math.random() * 2,
+                  emitter.y + band.yOffset + (Math.random() - 0.5) * 1.2,
+                  band.color
+                )
+              );
+            }
+          });
+        }
         const previousBottom = GROUND_Y - player.rise;
         const airborne = player.rise > 0 || player.vy !== 0;
         if (airborne) {
           const framesElapsed = dtMs / FRAME_MS;
+          const hasCapePower = state.specialUnlocks.cape;
           const dropFactor = player.speedDrop ? SPEED_DROP_COEFFICIENT : 1;
+          const gravityStep =
+            hasCapePower && player.jumpHeld && !player.speedDrop && player.vy < 0 && player.rise >= MAX_JUMP_RISE
+              ? GRAVITY * framesElapsed * CAPE_ASCENT_GRAVITY_MULTIPLIER
+              : hasCapePower && player.jumpHeld && player.vy > 0 && !player.speedDrop
+                ? GRAVITY * framesElapsed * CAPE_GLIDE_GRAVITY_MULTIPLIER
+              : GRAVITY * framesElapsed;
           player.rise -= player.vy * framesElapsed * dropFactor;
-          player.vy += GRAVITY * framesElapsed;
+          player.vy += gravityStep;
+          if (hasCapePower && player.jumpHeld && player.vy > 0 && !player.speedDrop) {
+            player.vy = Math.min(player.vy, CAPE_GLIDE_MAX_FALL_SPEED);
+          }
           if (player.rise >= MIN_JUMP_RISE || player.speedDrop) player.reachedMinRise = true;
           if (!player.jumpHeld && player.reachedMinRise) endJump(player);
-          if (player.rise >= MAX_JUMP_RISE || player.speedDrop) endJump(player);
+          if (player.rise >= getJumpMaxRise(hasCapePower) || player.speedDrop) endJump(player);
           if (player.rise <= 0) {
             player.rise = 0;
             player.vy = 0;
@@ -2303,16 +2776,22 @@ export default function UshuaiaRunnerFlorPrototype() {
           triggerQuiz();
         }
 
-        if (
-          state.phase === "running" &&
-          state.obstacles.some((obstacle) => obstacle.type !== "quizStar" && collides(player, obstacle, state.worldTime))
-        ) {
-          state.phase = "gameover";
-          player.dead = true;
-          player.jumpHeld = false;
-          state.bestDistance = Math.max(state.bestDistance, state.distance);
-          setBest(Math.floor(state.bestDistance));
-          setPhase("gameover");
+        const damagingObstacle = state.obstacles.find(
+          (obstacle) => obstacle.type !== "quizStar" && collides(player, obstacle, state.worldTime)
+        );
+        const playerFullyInvulnerable = player.invulnerableMs > 0 || player.hyperInvulnerableMs > 0;
+        if (state.phase === "running" && damagingObstacle && !playerFullyInvulnerable) {
+          if (absorbObstacleHit(state)) {
+            player.dead = false;
+            player.jumpHeld = false;
+          } else {
+            state.phase = "gameover";
+            player.dead = true;
+            player.jumpHeld = false;
+            state.bestDistance = Math.max(state.bestDistance, state.distance);
+            setBest(Math.floor(state.bestDistance));
+            setPhase("gameover");
+          }
         }
 
         setDistance(Math.floor(state.distance));
@@ -2345,7 +2824,7 @@ export default function UshuaiaRunnerFlorPrototype() {
       drawBackground(ctx, state.worldTime, state.dayNightTime);
       state.obstacles.forEach((obstacle) => drawObstacle(ctx, obstacle, state.worldTime));
       state.particles.forEach((particle) => drawParticle(ctx, particle));
-      drawRunner(ctx, state.player, state.worldTime, selectedCharacterRef.current);
+      drawRunner(ctx, state.player, state.worldTime, selectedCharacterRef.current, state.specialUnlocks);
       drawHud(ctx, state);
       drawScorePopups(ctx, state);
       if (state.phase !== "running") drawOverlay(ctx, state);
