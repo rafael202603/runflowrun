@@ -76,6 +76,7 @@ type GameState = {
   bestDistance: number;
   score: number;
   worldTime: number;
+  dayNightTime: number;
   nextObstacleDistance: number;
   nextStarDistance: number;
   player: PlayerState;
@@ -92,6 +93,7 @@ const W = 360;
 const H = 180;
 const GROUND_Y = 144;
 const FRAME_MS = 1000 / 60;
+const DAY_NIGHT_CYCLE_MS = 180_000;
 const DINO_DEFAULT_WIDTH = 600;
 const DINO_DEFAULT_HEIGHT = 150;
 
@@ -205,6 +207,52 @@ const COLORS = {
   etiosWheel: "#1d2229",
   etiosWheel2: "#8893a0",
 } as const;
+
+const TWILIGHT_COLORS = {
+  skyTop: "#713e56",
+  skyMid: "#d86857",
+  skyLow: "#ffaf5f",
+  horizon: "#ffd77b",
+  cloud: "#ffd2b4",
+  mountainBack: "#644a63",
+  mountainMid: "#533f57",
+  mountainFront: "#413548",
+  snow: "#ffe8d0",
+  bayTop: "#9d5a55",
+  bayLow: "#53355a",
+} as const;
+
+const NIGHT_COLORS = {
+  skyTop: "#091632",
+  skyMid: "#10284f",
+  skyLow: "#1a3f70",
+  horizon: "#2a5886",
+  cloud: "#9fb6d8",
+  mountainBack: "#2e3f59",
+  mountainMid: "#26364d",
+  mountainFront: "#1d2a3d",
+  snow: "#adc4e1",
+  bayTop: "#163e69",
+  bayLow: "#0c2442",
+  moon: "#f3f6ff",
+} as const;
+
+const STAR_FIELD: ReadonlyArray<readonly [number, number, number]> = [
+  [24, 14, 2],
+  [46, 28, 1],
+  [74, 18, 1],
+  [92, 36, 2],
+  [128, 16, 1],
+  [146, 28, 2],
+  [178, 18, 1],
+  [198, 34, 1],
+  [224, 12, 2],
+  [246, 26, 1],
+  [276, 18, 1],
+  [304, 30, 2],
+  [328, 16, 1],
+  [344, 28, 1],
+] as const;
 
 const CHARACTERS = [
   { id: "flor", name: "Flor", status: "available" },
@@ -353,6 +401,75 @@ const QUIZ_QUESTIONS: QuizQuestion[] = [
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 const pick = <T,>(items: T[]): T => items[Math.floor(Math.random() * items.length)];
 
+function hexToRgb(hex: string) {
+  if (hex.startsWith("rgb")) {
+    const channels = hex.match(/\d+/g)?.map(Number) ?? [0, 0, 0];
+    return {
+      r: channels[0] ?? 0,
+      g: channels[1] ?? 0,
+      b: channels[2] ?? 0,
+    };
+  }
+  const normalized = hex.replace("#", "");
+  const value = Number.parseInt(normalized, 16);
+  return {
+    r: (value >> 16) & 255,
+    g: (value >> 8) & 255,
+    b: value & 255,
+  };
+}
+
+function mixColor(from: string, to: string, amount: number) {
+  const t = clamp(amount, 0, 1);
+  const source = hexToRgb(from);
+  const target = hexToRgb(to);
+  const r = Math.round(source.r + (target.r - source.r) * t);
+  const g = Math.round(source.g + (target.g - source.g) * t);
+  const b = Math.round(source.b + (target.b - source.b) * t);
+  return `rgb(${r}, ${g}, ${b})`;
+}
+
+function getDayNightScene(dayNightTime: number) {
+  const progress = (((dayNightTime % DAY_NIGHT_CYCLE_MS) + DAY_NIGHT_CYCLE_MS) % DAY_NIGHT_CYCLE_MS) / DAY_NIGHT_CYCLE_MS;
+  const daylight = (Math.cos(progress * Math.PI * 2) + 1) / 2;
+  const twilight = Math.sin(progress * Math.PI * 2) ** 2;
+  const nightAmount = 1 - daylight;
+  const dayTravel = clamp(progress / 0.5, 0, 1);
+  const nightTravel = clamp((progress - 0.5) / 0.5, 0, 1);
+  const twilightBlend = twilight * 0.68;
+  const sunX = 304 - dayTravel * 156;
+  const sunY = 14 + dayTravel * 66;
+  const moonX = 308 - nightTravel * 212;
+  const moonY = 80 - Math.sin(nightTravel * Math.PI) * 58;
+
+  const blendSceneColor = (dayColor: string, twilightColor: string, nightColor: string) =>
+    mixColor(mixColor(nightColor, dayColor, daylight), twilightColor, twilightBlend);
+
+  return {
+    skyTop: blendSceneColor(COLORS.skyTop, TWILIGHT_COLORS.skyTop, NIGHT_COLORS.skyTop),
+    skyMid: blendSceneColor(COLORS.skyMid, TWILIGHT_COLORS.skyMid, NIGHT_COLORS.skyMid),
+    skyLow: blendSceneColor(COLORS.skyLow, TWILIGHT_COLORS.skyLow, NIGHT_COLORS.skyLow),
+    horizon: blendSceneColor("#dcefff", TWILIGHT_COLORS.horizon, NIGHT_COLORS.horizon),
+    cloud: blendSceneColor(COLORS.cloud, TWILIGHT_COLORS.cloud, NIGHT_COLORS.cloud),
+    mountainBack: blendSceneColor(COLORS.mountainBack, TWILIGHT_COLORS.mountainBack, NIGHT_COLORS.mountainBack),
+    mountainMid: blendSceneColor(COLORS.mountainMid, TWILIGHT_COLORS.mountainMid, NIGHT_COLORS.mountainMid),
+    mountainFront: blendSceneColor(COLORS.mountainFront, TWILIGHT_COLORS.mountainFront, NIGHT_COLORS.mountainFront),
+    snow: blendSceneColor(COLORS.snow, TWILIGHT_COLORS.snow, NIGHT_COLORS.snow),
+    bayTop: blendSceneColor(COLORS.bayTop, TWILIGHT_COLORS.bayTop, NIGHT_COLORS.bayTop),
+    bayLow: blendSceneColor(COLORS.bayLow, TWILIGHT_COLORS.bayLow, NIGHT_COLORS.bayLow),
+    sunX,
+    sunY,
+    sunVisible: progress < 0.5 && sunY < 80,
+    moonX,
+    moonY,
+    moonVisible: progress >= 0.5 && moonY < 80,
+    starAlpha: clamp((nightAmount - 0.12) / 0.52, 0, 1),
+    sceneShade: clamp(nightAmount * 0.1 + twilight * 0.01, 0, 0.11),
+    twilightGlow: clamp(twilight * (1 - nightAmount * 0.35) * 0.18, 0, 0.18),
+    lampGlow: clamp(nightAmount * 0.32, 0, 0.32),
+  };
+}
+
 function getCharacterName(characterId: string) {
   return CHARACTERS.find((character) => character.id === characterId)?.name ?? characterId;
 }
@@ -378,6 +495,7 @@ function createInitialState(): GameState {
     bestDistance: 0,
     score: 0,
     worldTime: 0,
+    dayNightTime: 0,
     nextObstacleDistance: 100,
     nextStarDistance: getNextStarDistance(0),
     player: {
@@ -656,19 +774,84 @@ function drawRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number
   ctx.fillRect(Math.round(x), Math.round(y), Math.round(w), Math.round(h));
 }
 
-function drawCloud(ctx: CanvasRenderingContext2D, x: number, y: number, scale = 1) {
+function drawCloud(ctx: CanvasRenderingContext2D, x: number, y: number, scale = 1, color: string = COLORS.cloud) {
   const s = scale;
-  drawRect(ctx, x, y + 2 * s, 14 * s, 4 * s, COLORS.cloud);
-  drawRect(ctx, x + 2 * s, y, 8 * s, 6 * s, COLORS.cloud);
-  drawRect(ctx, x + 8 * s, y + 1 * s, 8 * s, 5 * s, COLORS.cloud);
+  drawRect(ctx, x, y + 2 * s, 14 * s, 4 * s, color);
+  drawRect(ctx, x + 2 * s, y, 8 * s, 6 * s, color);
+  drawRect(ctx, x + 8 * s, y + 1 * s, 8 * s, 5 * s, color);
 }
 
-function drawSun(ctx: CanvasRenderingContext2D) {
-  drawRect(ctx, 290, 14, 16, 16, COLORS.sun);
-  drawRect(ctx, 296, 6, 4, 4, COLORS.sun);
-  drawRect(ctx, 296, 34, 4, 4, COLORS.sun);
-  drawRect(ctx, 282, 20, 4, 4, COLORS.sun);
-  drawRect(ctx, 310, 20, 4, 4, COLORS.sun);
+function drawSun(ctx: CanvasRenderingContext2D, x = 290, y = 14) {
+  drawRect(ctx, x, y, 16, 16, COLORS.sun);
+  drawRect(ctx, x + 6, y - 8, 4, 4, COLORS.sun);
+  drawRect(ctx, x + 6, y + 20, 4, 4, COLORS.sun);
+  drawRect(ctx, x - 8, y + 6, 4, 4, COLORS.sun);
+  drawRect(ctx, x + 20, y + 6, 4, 4, COLORS.sun);
+}
+
+function drawMoon(ctx: CanvasRenderingContext2D, x = 290, y = 14, skyColor: string) {
+  const moonShadow = mixColor(skyColor, NIGHT_COLORS.skyTop, 0.72);
+  const bodyRows = [
+    [7, 4],
+    [5, 8],
+    [4, 10],
+    [3, 11],
+    [2, 12],
+    [2, 12],
+    [2, 12],
+    [2, 12],
+    [3, 11],
+    [4, 10],
+    [5, 8],
+    [7, 4],
+  ] as const;
+  bodyRows.forEach(([offsetX, width], index) => {
+    drawRect(ctx, x + offsetX, y + index, width, 1, NIGHT_COLORS.moon);
+  });
+  const shadowRows = [
+    [8, 3],
+    [8, 5],
+    [8, 6],
+    [7, 7],
+    [7, 7],
+    [7, 7],
+    [7, 7],
+    [7, 7],
+    [7, 7],
+    [8, 6],
+    [8, 5],
+    [8, 3],
+  ] as const;
+  shadowRows.forEach(([offsetX, width], index) => {
+    drawRect(ctx, x + offsetX, y + index, width, 1, moonShadow);
+  });
+  const carveRows = [
+    [9, 2],
+    [9, 3],
+    [9, 4],
+    [8, 5],
+    [8, 5],
+    [8, 5],
+    [8, 5],
+    [8, 5],
+    [8, 5],
+    [9, 4],
+    [9, 3],
+    [9, 2],
+  ] as const;
+  carveRows.forEach(([offsetX, width], index) => {
+    drawRect(ctx, x + offsetX, y + index, width, 1, skyColor);
+  });
+  drawRect(ctx, x + 4, y + 3, 1, 4, "rgba(255, 255, 255, 0.85)");
+  drawRect(ctx, x + 5, y + 2, 1, 7, "rgba(255, 255, 255, 0.55)");
+}
+
+function drawStars(ctx: CanvasRenderingContext2D, alpha: number) {
+  if (alpha <= 0) return;
+  const glow = 0.24 + alpha * 0.76;
+  STAR_FIELD.forEach(([x, y, size]) => {
+    drawRect(ctx, x, y, size, size, `rgba(248, 250, 252, ${glow})`);
+  });
 }
 
 function drawPoly(ctx: CanvasRenderingContext2D, points: Array<[number, number]>, color: string) {
@@ -683,13 +866,16 @@ function drawPoly(ctx: CanvasRenderingContext2D, points: Array<[number, number]>
   ctx.fill();
 }
 
-function drawUshuaiaMountainProfiles(ctx: CanvasRenderingContext2D) {
-  drawPoly(ctx, [[0,106],[0,96],[22,96],[38,88],[52,72],[58,46],[62,36],[66,48],[74,70],[88,88],[110,97],[138,96],[156,84],[176,72],[192,60],[204,56],[220,68],[238,86],[258,97],[282,94],[302,78],[320,70],[340,68],[360,72],[360,106]], COLORS.mountainBack);
-  drawPoly(ctx, [[0,108],[0,102],[28,101],[46,94],[58,76],[64,58],[68,52],[72,62],[84,86],[96,96],[122,104],[156,103],[176,92],[194,82],[206,72],[216,74],[232,86],[248,98],[280,104],[310,102],[330,94],[348,92],[360,94],[360,108]], COLORS.mountainMid);
-  drawPoly(ctx, [[0,112],[0,108],[36,108],[60,104],[84,100],[114,103],[150,108],[200,107],[236,103],[274,104],[316,110],[360,112],[360,114],[0,114]], COLORS.mountainFront);
-  drawPoly(ctx, [[56,52],[60,46],[63,40],[66,48],[69,56],[64,54],[61,58]], COLORS.snow);
-  drawPoly(ctx, [[174,78],[188,68],[200,62],[210,70],[194,74],[182,82]], COLORS.snow);
-  drawPoly(ctx, [[302,95],[314,89],[326,86],[336,90],[322,92],[308,98]], COLORS.snow);
+function drawUshuaiaMountainProfiles(
+  ctx: CanvasRenderingContext2D,
+  palette: Pick<ReturnType<typeof getDayNightScene>, "mountainBack" | "mountainMid" | "mountainFront" | "snow">
+) {
+  drawPoly(ctx, [[0,106],[0,96],[22,96],[38,88],[52,72],[58,46],[62,36],[66,48],[74,70],[88,88],[110,97],[138,96],[156,84],[176,72],[192,60],[204,56],[220,68],[238,86],[258,97],[282,94],[302,78],[320,70],[340,68],[360,72],[360,106]], palette.mountainBack);
+  drawPoly(ctx, [[0,108],[0,102],[28,101],[46,94],[58,76],[64,58],[68,52],[72,62],[84,86],[96,96],[122,104],[156,103],[176,92],[194,82],[206,72],[216,74],[232,86],[248,98],[280,104],[310,102],[330,94],[348,92],[360,94],[360,108]], palette.mountainMid);
+  drawPoly(ctx, [[0,112],[0,108],[36,108],[60,104],[84,100],[114,103],[150,108],[200,107],[236,103],[274,104],[316,110],[360,112],[360,114],[0,114]], palette.mountainFront);
+  drawPoly(ctx, [[56,52],[60,46],[63,40],[66,48],[69,56],[64,54],[61,58]], palette.snow);
+  drawPoly(ctx, [[174,78],[188,68],[200,62],[210,70],[194,74],[182,82]], palette.snow);
+  drawPoly(ctx, [[302,95],[314,89],[326,86],[336,90],[322,92],[308,98]], palette.snow);
 }
 
 function drawGenericCruiseShip(ctx: CanvasRenderingContext2D, x: number, y: number, variant: "large" | "medium" | "small") {
@@ -737,9 +923,12 @@ function drawMooringLine(ctx: CanvasRenderingContext2D, x1: number, y1: number, 
   }
 }
 
-function drawHorizonWaterAndShips(ctx: CanvasRenderingContext2D) {
-  drawRect(ctx, 0, 114, W, 12, COLORS.bayTop);
-  drawRect(ctx, 0, 126, W, 4, COLORS.bayLow);
+function drawHorizonWaterAndShips(
+  ctx: CanvasRenderingContext2D,
+  palette: Pick<ReturnType<typeof getDayNightScene>, "bayTop" | "bayLow">
+) {
+  drawRect(ctx, 0, 114, W, 12, palette.bayTop);
+  drawRect(ctx, 0, 126, W, 4, palette.bayLow);
   drawRect(ctx, 0, 124, W, 1, "rgba(255,255,255,0.18)");
   drawGenericCruiseShip(ctx, 206, 92, "medium");
   drawGenericCruiseShip(ctx, 284, 103, "small");
@@ -754,7 +943,7 @@ function drawMast(ctx: CanvasRenderingContext2D, x: number, y: number) {
   drawRect(ctx, x - 3, y - 5, 9, 3, COLORS.mastLight);
 }
 
-function drawPierScene(ctx: CanvasRenderingContext2D, worldTime: number) {
+function drawPierScene(ctx: CanvasRenderingContext2D, worldTime: number, lampGlow: number) {
   drawRect(ctx, 0, 130, W, 50, COLORS.pier);
   drawRect(ctx, 0, 136, W, 3, COLORS.pierShade);
   drawRect(ctx, 0, 144, W, 36, COLORS.pierDark);
@@ -767,6 +956,11 @@ function drawPierScene(ctx: CanvasRenderingContext2D, worldTime: number) {
   }
   for (let i = -1; i < 5; i += 1) {
     drawMast(ctx, i * 110 + 76 - streetOffset, 102);
+    if (lampGlow > 0.02) {
+      const glowX = i * 110 + 76 - streetOffset - 7;
+      drawRect(ctx, glowX, 94, 17, 10, `rgba(248, 210, 59, ${lampGlow})`);
+      drawRect(ctx, glowX + 6, 96, 3, 4, COLORS.mastLight);
+    }
   }
   for (let i = 0; i < 7; i += 1) {
     const x = i * 52 + 12 - (worldTime * 0.025) % 52;
@@ -775,18 +969,27 @@ function drawPierScene(ctx: CanvasRenderingContext2D, worldTime: number) {
   }
 }
 
-function drawBackground(ctx: CanvasRenderingContext2D, worldTime: number) {
-  drawRect(ctx, 0, 0, W, 34, COLORS.skyTop);
-  drawRect(ctx, 0, 34, W, 34, COLORS.skyMid);
-  drawRect(ctx, 0, 68, W, 18, COLORS.skyLow);
-  drawRect(ctx, 0, 86, W, 28, "#dcefff");
-  drawSun(ctx);
-  drawCloud(ctx, 18 - (worldTime * 0.006) % 420, 18, 1);
-  drawCloud(ctx, 110 - (worldTime * 0.004) % 440, 21, 2);
-  drawCloud(ctx, 262 - (worldTime * 0.005) % 460, 26, 1);
-  drawUshuaiaMountainProfiles(ctx);
-  drawHorizonWaterAndShips(ctx);
-  drawPierScene(ctx, worldTime);
+function drawBackground(ctx: CanvasRenderingContext2D, worldTime: number, dayNightTime: number) {
+  const scene = getDayNightScene(dayNightTime);
+  drawRect(ctx, 0, 0, W, 34, scene.skyTop);
+  drawRect(ctx, 0, 34, W, 34, scene.skyMid);
+  drawRect(ctx, 0, 68, W, 18, scene.skyLow);
+  drawRect(ctx, 0, 86, W, 28, scene.horizon);
+  drawStars(ctx, scene.starAlpha);
+  if (scene.sunVisible) drawSun(ctx, scene.sunX, scene.sunY);
+  if (scene.moonVisible) drawMoon(ctx, scene.moonX, scene.moonY, scene.skyMid);
+  drawCloud(ctx, 18 - (worldTime * 0.006) % 420, 18, 1, scene.cloud);
+  drawCloud(ctx, 110 - (worldTime * 0.004) % 440, 21, 2, scene.cloud);
+  drawCloud(ctx, 262 - (worldTime * 0.005) % 460, 26, 1, scene.cloud);
+  if (scene.twilightGlow > 0.01) {
+    drawRect(ctx, 0, 60, W, 44, `rgba(255, 148, 94, ${scene.twilightGlow})`);
+  }
+  drawUshuaiaMountainProfiles(ctx, scene);
+  drawHorizonWaterAndShips(ctx, scene);
+  drawPierScene(ctx, worldTime, scene.lampGlow);
+  if (scene.sceneShade > 0.01) {
+    drawRect(ctx, 0, 0, W, H, `rgba(4, 10, 28, ${scene.sceneShade})`);
+  }
 }
 
 function drawPrefectura(ctx: CanvasRenderingContext2D, x: number, y: number) {
@@ -1851,7 +2054,8 @@ export default function UshuaiaRunnerFlorPrototype() {
 
   const resetGame = (startRunning = true) => {
     const bestDistance = Math.max(stateRef.current.bestDistance, stateRef.current.distance);
-    stateRef.current = { ...createInitialState(), bestDistance, phase: startRunning ? "running" : "ready" };
+    const dayNightTime = stateRef.current.dayNightTime;
+    stateRef.current = { ...createInitialState(), bestDistance, dayNightTime, phase: startRunning ? "running" : "ready" };
     submittedScoreRef.current = null;
     setBest(Math.floor(bestDistance));
     setDistance(0);
@@ -2021,6 +2225,7 @@ export default function UshuaiaRunnerFlorPrototype() {
       const dtMs = Math.min(32, now - last || 16.67);
       const dt = dtMs / 16.67;
       last = now;
+      state.dayNightTime += dtMs;
       state.scorePopups = updateScorePopups(state.scorePopups, dtMs, dt);
       state.quizFeedback = updateQuizFeedback(state.quizFeedback, dtMs);
 
@@ -2137,7 +2342,7 @@ export default function UshuaiaRunnerFlorPrototype() {
       ctx.imageSmoothingEnabled = false;
       ctx.setTransform(scale, 0, 0, scale, 0, 0);
       ctx.clearRect(0, 0, W, H);
-      drawBackground(ctx, state.worldTime);
+      drawBackground(ctx, state.worldTime, state.dayNightTime);
       state.obstacles.forEach((obstacle) => drawObstacle(ctx, obstacle, state.worldTime));
       state.particles.forEach((particle) => drawParticle(ctx, particle));
       drawRunner(ctx, state.player, state.worldTime, selectedCharacterRef.current);
