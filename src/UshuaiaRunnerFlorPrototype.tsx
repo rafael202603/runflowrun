@@ -1,8 +1,21 @@
 import React, { useEffect, useRef, useState } from "react";
 import runFlowRunIcon from "./assets/rfr.png";
+import mateSpriteSrc from "./assets/mate.png";
+import poisonSpriteSrc from "./assets/poison.png";
+import skullSpriteSrc from "./assets/skull.png";
 import { fetchTopLeaderboard, getErrorMessage, normalizeNickname, submitBestLeaderboardScore, type LeaderboardRow } from "./lib/leaderboard";
 
-type ObstacleType = "etios" | "prefectura" | "barrels" | "forklift" | "container" | "suitcase" | "ypfTruck" | "quizStar";
+type ObstacleType =
+  | "etios"
+  | "prefectura"
+  | "barrels"
+  | "forklift"
+  | "container"
+  | "suitcase"
+  | "poison"
+  | "ypfTruck"
+  | "quizStar"
+  | "matePower";
 type Phase = "ready" | "running" | "quiz" | "gameover";
 
 type PlayerState = {
@@ -16,6 +29,9 @@ type PlayerState = {
   speedDrop: boolean;
   invulnerableMs: number;
   hyperInvulnerableMs: number;
+  matePowerMs: number;
+  matePowerChainShiftMs: number;
+  matePowerLockedOffset: number;
 };
 
 type Obstacle = {
@@ -46,9 +62,10 @@ type ScorePopup = {
   vy: number;
   life: number;
   totalLife: number;
+  holdMs?: number;
   text: string;
   color: string;
-  variant?: "default" | "argento";
+  variant?: "default" | "argento" | "divine";
 };
 
 type QuizQuestion = {
@@ -69,6 +86,7 @@ type QuizFeedback = {
   pointsText: string;
   color: string;
   glow: string;
+  icon?: "skull";
   life: number;
   totalLife: number;
 };
@@ -77,16 +95,52 @@ type SpecialItemKey = "glasses" | "cap" | "cape";
 
 type SpecialUnlocks = Record<SpecialItemKey, boolean>;
 
+let mateSpriteImage: HTMLImageElement | null = null;
+let poisonSpriteImage: HTMLImageElement | null = null;
+let skullSpriteImage: HTMLImageElement | null = null;
+
+function getMateSpriteImage() {
+  if (typeof Image === "undefined") return null;
+  if (!mateSpriteImage) {
+    mateSpriteImage = new Image();
+    mateSpriteImage.src = mateSpriteSrc;
+  }
+  return mateSpriteImage;
+}
+
+function getPoisonSpriteImage() {
+  if (typeof Image === "undefined") return null;
+  if (!poisonSpriteImage) {
+    poisonSpriteImage = new Image();
+    poisonSpriteImage.src = poisonSpriteSrc;
+  }
+  return poisonSpriteImage;
+}
+
+function getSkullSpriteImage() {
+  if (typeof Image === "undefined") return null;
+  if (!skullSpriteImage) {
+    skullSpriteImage = new Image();
+    skullSpriteImage.src = skullSpriteSrc;
+  }
+  return skullSpriteImage;
+}
+
 type GameState = {
   phase: Phase;
   speed: number;
+  baseSpeed: number;
   distance: number;
   bestDistance: number;
+  bestTotal: number;
   score: number;
   worldTime: number;
+  sceneMotionTime: number;
   dayNightTime: number;
   nextObstacleDistance: number;
   nextStarDistance: number;
+  nextMatePowerDistance: number;
+  nextPoisonDistance: number | null;
   player: PlayerState;
   obstacles: Obstacle[];
   particles: Particle[];
@@ -98,7 +152,9 @@ type GameState = {
   specialUnlocks: SpecialUnlocks;
   specialMilestonesClaimed: SpecialUnlocks;
   nextSpecialRecoveryDistance: number | null;
+  pendingMatePowerBonusSpawnMs: number | null;
   quizCorrectStreak: number;
+  screenShakeMs: number;
 };
 
 const W = 360;
@@ -123,9 +179,11 @@ const DINO_GAP_COEFFICIENT = 0.6;
 const DINO_MAX_GAP_COEFFICIENT = 1.5;
 const DINO_FLYING_YPOS = [100, 75, 50] as const;
 const DINO_TREX_HEIGHT = 47;
+const PLAYER_BASE_X = 48;
 const PLAYER_STAND_HEIGHT = 28;
 const PLAYER_DUCK_HEIGHT = 20;
 const QUIZ_STAR_SIZE = 32;
+const MATE_POWER_SIZE = 28;
 const QUIZ_DURATION_MS = 10000;
 const QUIZ_SCORE_DELTA = 5000;
 const QUIZ_WRONG_SCORE_DELTA = 2500;
@@ -133,11 +191,49 @@ const QUIZ_TIMEOUT_SCORE_DELTA = 5000;
 const QUIZ_FEEDBACK_DURATION_MS = 950;
 const SCORE_POPUP_DURATION_MS = 2500;
 const HYPER_POWER_FEEDBACK_DURATION_MS = 2500;
+const MATE_POWER_FEEDBACK_DURATION_MS = 2000;
+const POISON_FEEDBACK_DURATION_MS = 2200;
+const POISON_SHAKE_MS = 3_000;
+const MATE_POWER_GLOW_MS = 10_000;
+const FIRST_MATE_POWER_DISTANCE = 15_000;
+const MATE_POWER_DISTANCE_INTERVAL = 15_000;
+const BONUS_MATE_POWER_SPAWN_CHANCE = 0.5;
+const BONUS_MATE_POWER_SPAWN_MIN_MS = 1_500;
+const BONUS_MATE_POWER_SPAWN_MAX_MS = 8_500;
+const FLYING_OBSTACLE_WEIGHT_BOOST_CHANCE = 0.5;
+const ARGENTO_FLYING_OBSTACLE_WEIGHT_MULTIPLIER = 1.8;
+const FORKLIFT_SCALE = 1.1;
+const POISON_SIZE = 28;
+const POISON_SPEED_MULTIPLIER = 1;
+const POISON_SWING_FREQUENCY = 0.014;
+const MATE_POWER_SHAKE_MS = 360;
+const OBSTACLE_BREAK_SHAKE_MS = 288;
+const TRUCK_BREAK_SHAKE_MS = 450;
 const QUIZ_HYPER_STREAK_TARGET = 1;
-const QUIZ_HYPER_INVULNERABILITY_MS = 5_000;
+const QUIZ_HYPER_INVULNERABILITY_MS = 7_000;
 const QUIZ_HYPER_WARNING_MS = 2_600;
 const QUIZ_STAR_YPOS = [GROUND_Y - 84, GROUND_Y - 66, GROUND_Y - 48] as const;
+const MATE_POWER_YPOS = [GROUND_Y - 55, GROUND_Y - 51, GROUND_Y - 47] as const;
+const SUITCASE_TOP_MARGIN_RATIO = 0.2;
+const ARGENTO_HIGH_SUITCASE_RANDOM_CHANCE = 0.5;
+const SUITCASE_HIGH_HEIGHT_BIAS = 0.6;
+const POISON_MIN_Y = Math.ceil(H * SUITCASE_TOP_MARGIN_RATIO);
+const POISON_MAX_Y = GROUND_Y - POISON_SIZE;
+const MATE_POWER_SWING_AMPLITUDE = 20;
+const MATE_POWER_SWING_FREQUENCY = 0.032;
+const MATE_POWER_X_SHIFT_RATIO = 0.5;
+const MATE_POWER_CHAIN_X_SHIFT_RATIO = 0.15;
+const MATE_POWER_X_SHIFT_IN_MS = 1_000;
+const MATE_POWER_X_SHIFT_OUT_MS = 3_000;
+const MATE_POWER_CHAIN_X_SHIFT_IN_MS = 1_000;
+const MATE_POWER_CHAIN_X_SHIFT_OUT_MS = 2_000;
 const QUIZ_CONFETTI_COLORS = ["#fde047", "#22c55e", "#38bdf8", "#f97316", "#f472b6"] as const;
+const MATE_POWER_TRAIL_COLORS = ["#74acdf", "#f8fbff", "#74acdf"] as const;
+const MATE_POWER_DIVINE_COLORS = ["#fef08a", "#facc15", "#f59e0b", "#fff7c2", "#fde68a"] as const;
+const OBSTACLE_BREAK_SCORE = 1000;
+const TRUCK_BREAK_SCORE = 5000;
+const POWERED_STAR_SCORE = 2500;
+const POISON_INVULNERABILITY_MS = 3_000;
 const SPECIAL_ITEM_THRESHOLDS: Record<SpecialItemKey, number> = {
   glasses: 2500,
   cap: 5000,
@@ -168,12 +264,7 @@ const SPEED_DROP_COEFFICIENT = BASE_SPEED_DROP_COEFFICIENT;
 const MIN_JUMP_RISE = BASE_MIN_JUMP_HEIGHT * VERTICAL_SCALE;
 const MAX_JUMP_RISE = BASE_MAX_JUMP_HEIGHT * VERTICAL_SCALE;
 const CAPE_GLIDE_MAX_FALL_SPEED = 1.05 * VERTICAL_SCALE;
-const SUITCASE_FLYING_YPOS = DINO_FLYING_YPOS.map((y) => {
-  const dinoGroundTop = 93;
-  const dinoOffsetFromGroundTop = y - dinoGroundTop;
-  const playerGroundTop = GROUND_Y - PLAYER_STAND_HEIGHT;
-  return Math.round(playerGroundTop + dinoOffsetFromGroundTop * (PLAYER_STAND_HEIGHT / DINO_TREX_HEIGHT));
-});
+const SUITCASE_FLYING_YPOS = [GROUND_Y - 24, GROUND_Y - 42, GROUND_Y - 48] as const;
 
 const COLORS = {
   ink: "#10151d",
@@ -484,10 +575,11 @@ function parseColorChannels(color: string) {
   return { ...rgb, a: 1 };
 }
 
-let activeRunnerHyperRender:
+let activeRunnerAuraRender:
   | {
       worldTime: number;
       warning: boolean;
+      mode: "hyper" | "mate";
     }
   | null = null;
 
@@ -506,6 +598,25 @@ function getHyperPaletteColor(color: string, worldTime: number, x = 0, y = 0) {
   const palette = palettes[palettePhase]!;
   const spatialPhase = Math.abs(Math.round(x + y)) % 2;
   const bucketBase = luminance < 0.12 ? 1 : luminance < 0.34 ? 2 : luminance < 0.7 ? 2 : 3;
+  const bucket = clamp(bucketBase + spatialPhase - (palettePhase % 2 === 0 ? 0 : 1), 0, 3);
+  const mapped = hexToRgb(palette[bucket]!);
+  return `rgba(${mapped.r}, ${mapped.g}, ${mapped.b}, ${a})`;
+}
+
+function getMatePowerPaletteColor(color: string, worldTime: number, x = 0, y = 0) {
+  const { r, g, b, a } = parseColorChannels(color);
+  const luminance = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+  const palettePhase = Math.floor(worldTime / 42) % 5;
+  const palettes = [
+    ["#5e3b06", "#d4a017", "#facc15", "#fff7c2"],
+    ["#714b10", "#e0aa23", "#ffe06d", "#fffbea"],
+    ["#6b3f0b", "#c8860d", "#f6c343", "#fff4bf"],
+    ["#7a5212", "#e6b93b", "#ffd772", "#fff9d8"],
+    ["#583507", "#b7790d", "#f2bf49", "#fff3b3"],
+  ] as const;
+  const palette = palettes[palettePhase]!;
+  const spatialPhase = Math.abs(Math.round(x + y + worldTime * 0.02)) % 2;
+  const bucketBase = luminance < 0.12 ? 1 : luminance < 0.34 ? 1 : luminance < 0.7 ? 2 : 3;
   const bucket = clamp(bucketBase + spatialPhase - (palettePhase % 2 === 0 ? 0 : 1), 0, 3);
   const mapped = hexToRgb(palette[bucket]!);
   return `rgba(${mapped.r}, ${mapped.g}, ${mapped.b}, ${a})`;
@@ -569,19 +680,62 @@ function getNextStarDistance(distance: number) {
   return distance + 240 + Math.random() * 140;
 }
 
+function getNextMatePowerDistance(distance: number) {
+  return distance + MATE_POWER_DISTANCE_INTERVAL;
+}
+
+function getNextPoisonDistance(distance: number) {
+  return distance + 8_000 + Math.random() * 4_000;
+}
+
+function getMatePowerPlayerOffset(matePowerMs: number) {
+  if (matePowerMs <= 0) return 0;
+  const maxOffset = PLAYER_BASE_X * MATE_POWER_X_SHIFT_RATIO;
+  const elapsedMs = MATE_POWER_GLOW_MS - matePowerMs;
+  if (elapsedMs < MATE_POWER_X_SHIFT_IN_MS) {
+    return maxOffset * clamp(elapsedMs / MATE_POWER_X_SHIFT_IN_MS, 0, 1);
+  }
+  if (matePowerMs <= MATE_POWER_X_SHIFT_OUT_MS) {
+    return maxOffset * clamp(matePowerMs / MATE_POWER_X_SHIFT_OUT_MS, 0, 1);
+  }
+  return maxOffset;
+}
+
+function getLockedMatePowerOffset(matePowerMs: number, matePowerLockedOffset: number) {
+  if (matePowerMs <= 0 || matePowerLockedOffset <= 0) return 0;
+  if (matePowerMs > MATE_POWER_X_SHIFT_OUT_MS) return matePowerLockedOffset;
+  return matePowerLockedOffset * clamp(matePowerMs / MATE_POWER_X_SHIFT_OUT_MS, 0, 1);
+}
+
+function getMatePowerChainOffset(matePowerChainShiftMs: number) {
+  if (matePowerChainShiftMs <= 0) return 0;
+  const maxOffset = PLAYER_BASE_X * MATE_POWER_CHAIN_X_SHIFT_RATIO;
+  const totalMs = MATE_POWER_CHAIN_X_SHIFT_IN_MS + MATE_POWER_CHAIN_X_SHIFT_OUT_MS;
+  const elapsedMs = totalMs - matePowerChainShiftMs;
+  if (elapsedMs < MATE_POWER_CHAIN_X_SHIFT_IN_MS) {
+    return maxOffset * clamp(elapsedMs / MATE_POWER_CHAIN_X_SHIFT_IN_MS, 0, 1);
+  }
+  return maxOffset * clamp(matePowerChainShiftMs / MATE_POWER_CHAIN_X_SHIFT_OUT_MS, 0, 1);
+}
+
 function createInitialState(): GameState {
   return {
     phase: "ready",
     speed: START_SPEED,
+    baseSpeed: START_SPEED,
     distance: 0,
     bestDistance: 0,
+    bestTotal: 0,
     score: 0,
     worldTime: 0,
+    sceneMotionTime: 0,
     dayNightTime: 0,
     nextObstacleDistance: 100,
     nextStarDistance: getNextStarDistance(0),
+    nextMatePowerDistance: FIRST_MATE_POWER_DISTANCE,
+    nextPoisonDistance: getNextPoisonDistance(0),
     player: {
-      x: 48,
+      x: PLAYER_BASE_X,
       rise: 0,
       vy: 0,
       ducking: false,
@@ -591,6 +745,9 @@ function createInitialState(): GameState {
       speedDrop: false,
       invulnerableMs: 0,
       hyperInvulnerableMs: 0,
+      matePowerMs: 0,
+      matePowerChainShiftMs: 0,
+      matePowerLockedOffset: 0,
     },
     obstacles: [],
     particles: [],
@@ -610,7 +767,9 @@ function createInitialState(): GameState {
       cape: false,
     },
     nextSpecialRecoveryDistance: null,
+    pendingMatePowerBonusSpawnMs: null,
     quizCorrectStreak: 0,
+    screenShakeMs: 0,
   };
 }
 
@@ -620,13 +779,31 @@ function obstaclePool(distance: number): Array<Omit<Obstacle, "x" | "bob" | "bas
     { type: "prefectura", w: 14, h: 27, y: GROUND_Y - 27 },
   ];
   if (distance >= 80) pool.push({ type: "barrels", w: 14, h: 18, y: GROUND_Y - 18 });
-  if (distance >= 130) pool.push({ type: "forklift", w: 30, h: 21, y: GROUND_Y - 21 });
+  if (distance >= 130) pool.push({ type: "forklift", w: 33, h: 23, y: GROUND_Y - 23 });
   if (distance >= 180) pool.push({ type: "container", w: 30, h: 23, y: GROUND_Y - 23 });
   if (distance >= 110) pool.push({ type: "suitcase", w: 16, h: 22, y: SUITCASE_FLYING_YPOS[0]! });
   return pool;
 }
 
-function createObstacle(distance: number): Obstacle {
+function getSuitcaseSpawnY(argentoActive: boolean) {
+  if (argentoActive && Math.random() < ARGENTO_HIGH_SUITCASE_RANDOM_CHANCE) {
+    const minY = Math.ceil(H * SUITCASE_TOP_MARGIN_RATIO);
+    const maxY = GROUND_Y - PLAYER_STAND_HEIGHT - MAX_JUMP_RISE - 24;
+    return Math.round(minY + Math.random() * (maxY - minY));
+  }
+  const lowJumpHeight = SUITCASE_FLYING_YPOS[0]!;
+  const duckHeight = SUITCASE_FLYING_YPOS[1]!;
+  const safeHighHeight = SUITCASE_FLYING_YPOS[2]!;
+  const weightedHeights = [
+    lowJumpHeight,
+    duckHeight,
+    safeHighHeight,
+    safeHighHeight,
+  ] as const;
+  return Math.random() < SUITCASE_HIGH_HEIGHT_BIAS ? pick([...weightedHeights]) : pick([...SUITCASE_FLYING_YPOS]);
+}
+
+function createObstacle(distance: number, argentoActive: boolean): Obstacle {
   if (distance >= 260 && Math.random() < 0.14) {
     return {
       type: "ypfTruck",
@@ -638,8 +815,15 @@ function createObstacle(distance: number): Obstacle {
       bob: 0,
     };
   }
-  const base = pick(obstaclePool(distance));
-  const resolvedY = base.type === "suitcase" ? pick([...SUITCASE_FLYING_YPOS]) : base.y;
+  const pool = obstaclePool(distance);
+  const flyingObstacleBoostChance = argentoActive
+    ? Math.min(1, FLYING_OBSTACLE_WEIGHT_BOOST_CHANCE * ARGENTO_FLYING_OBSTACLE_WEIGHT_MULTIPLIER)
+    : FLYING_OBSTACLE_WEIGHT_BOOST_CHANCE;
+  if (distance >= 110 && Math.random() < flyingObstacleBoostChance) {
+    pool.push({ type: "suitcase", w: 16, h: 22, y: SUITCASE_FLYING_YPOS[0]! });
+  }
+  const base = pick(pool);
+  const resolvedY = base.type === "suitcase" ? getSuitcaseSpawnY(argentoActive) : base.y;
   return {
     ...base,
     x: W + 20,
@@ -662,6 +846,32 @@ function createQuizStar(): Obstacle {
   };
 }
 
+function createMatePower(): Obstacle {
+  const baseY = pick([...MATE_POWER_YPOS]);
+  return {
+    type: "matePower",
+    x: W + 30,
+    y: baseY,
+    baseY,
+    w: MATE_POWER_SIZE,
+    h: MATE_POWER_SIZE,
+    bob: Math.random() < 0.5 ? 0 : Math.PI,
+  };
+}
+
+function createPoison(): Obstacle {
+  const baseY = Math.round((POISON_MIN_Y + POISON_MAX_Y) / 2);
+  return {
+    type: "poison",
+    x: W + 26,
+    y: baseY,
+    baseY,
+    w: POISON_SIZE,
+    h: POISON_SIZE,
+    bob: Math.random() * Math.PI * 2,
+  };
+}
+
 function getNextObstacleGap(obstacle: Obstacle, speed: number): number {
   const baseMinGapMap: Record<ObstacleType, number> = {
     prefectura: 120,
@@ -670,8 +880,10 @@ function getNextObstacleGap(obstacle: Obstacle, speed: number): number {
     forklift: 120,
     container: 120,
     suitcase: 150,
+    poison: 150,
     ypfTruck: 290,
     quizStar: 190,
+    matePower: 220,
   };
   const scaledBaseMinGap = baseMinGapMap[obstacle.type] * (W / DINO_DEFAULT_WIDTH);
   const minGap = Math.round(obstacle.w * speed + scaledBaseMinGap * DINO_GAP_COEFFICIENT);
@@ -679,36 +891,54 @@ function getNextObstacleGap(obstacle: Obstacle, speed: number): number {
   return minGap + Math.random() * (maxGap - minGap);
 }
 
+function getAnimatedObstacleX(obstacle: Obstacle, worldTime: number) {
+  return obstacle.x;
+}
+
 function getAnimatedObstacleY(obstacle: Obstacle, worldTime: number) {
   if (obstacle.type === "suitcase") {
     return obstacle.baseY + Math.round(Math.sin(worldTime * 0.01 + obstacle.bob) * 1);
+  }
+  if (obstacle.type === "poison") {
+    const travel = Math.max(0, W + 26 - obstacle.x);
+    const swingRadius = (POISON_MAX_Y - POISON_MIN_Y) / 2;
+    return Math.round(obstacle.baseY + Math.sin(travel * POISON_SWING_FREQUENCY + obstacle.bob) * swingRadius);
   }
   if (obstacle.type === "quizStar") {
     const hop = Math.abs(Math.sin(worldTime * 0.015 + obstacle.bob));
     return obstacle.baseY - Math.round(hop * 8);
   }
+  if (obstacle.type === "matePower") {
+    const travel = Math.max(0, W + 30 - obstacle.x);
+    return Math.round(obstacle.baseY + Math.sin(travel * MATE_POWER_SWING_FREQUENCY + obstacle.bob) * MATE_POWER_SWING_AMPLITUDE);
+  }
   return obstacle.baseY;
 }
 
 function getObstacleHitbox(obstacle: Obstacle, worldTime = 0) {
+  const x = getAnimatedObstacleX(obstacle, worldTime);
   const y = getAnimatedObstacleY(obstacle, worldTime);
   switch (obstacle.type) {
     case "prefectura":
-      return { x: obstacle.x + 3, y: y + 2, w: 8, h: 23 };
+      return { x: x + 3, y: y + 2, w: 8, h: 23 };
     case "etios":
-      return { x: obstacle.x + 1, y: y + 3, w: 31, h: 12 };
+      return { x: x + 1, y: y + 3, w: 31, h: 12 };
     case "barrels":
-      return { x: obstacle.x + 2, y: y + 1, w: 10, h: 16 };
+      return { x: x + 2, y: y + 1, w: 10, h: 16 };
     case "forklift":
-      return { x: obstacle.x + 1, y: y + 2, w: 28, h: 18 };
+      return { x: x + 1, y: y + 2, w: 31, h: 20 };
     case "container":
-      return { x: obstacle.x + 1, y: y + 1, w: 28, h: 21 };
+      return { x: x + 1, y: y + 1, w: 28, h: 21 };
     case "suitcase":
-      return { x: obstacle.x + 1, y: y + 2, w: 14, h: 18 };
+      return { x: x + 1, y: y + 2, w: 14, h: 18 };
+    case "poison":
+      return { x: x + 6, y: y + 4, w: obstacle.w - 10, h: obstacle.h - 8 };
     case "ypfTruck":
-      return { x: obstacle.x + 2, y: y + 10, w: 116, h: 24 };
+      return { x: x + 2, y: y + 10, w: 116, h: 24 };
     case "quizStar":
-      return { x: obstacle.x + 4, y: y + 3, w: obstacle.w - 8, h: obstacle.h - 8 };
+      return { x: x + 4, y: y + 3, w: obstacle.w - 8, h: obstacle.h - 8 };
+    case "matePower":
+      return { x: x + 8, y: y + 8, w: obstacle.w - 16, h: obstacle.h - 14 };
   }
 }
 
@@ -743,14 +973,17 @@ function createScorePopup(
   color: string,
   x = W / 2,
   y = 74,
-  variant: ScorePopup["variant"] = "default"
+  variant: ScorePopup["variant"] = "default",
+  holdMs = 0
 ): ScorePopup {
+  const totalLife = SCORE_POPUP_DURATION_MS + holdMs;
   return {
     x,
     y,
     vy: -0.32,
-    life: SCORE_POPUP_DURATION_MS,
-    totalLife: SCORE_POPUP_DURATION_MS,
+    life: totalLife,
+    totalLife,
+    holdMs,
     text,
     color,
     variant,
@@ -946,9 +1179,9 @@ function launchDistanceCelebration(state: GameState, itemKey: SpecialItemKey, so
     );
   }
   const feedback = getGainedSpecialItemText(itemKey, source);
-  const popupX = feedback.variant === "argento" ? W / 2 : 58;
-  const popupY = feedback.variant === "argento" ? 48 : 48;
-  state.scorePopups.push(createScorePopup(feedback.text, feedback.color, popupX, popupY, feedback.variant));
+  const popupX = W / 2;
+  const popupY = feedback.variant === "argento" ? 78 : 74;
+  state.scorePopups.push(createScorePopup(feedback.text, feedback.color, popupX, popupY, feedback.variant, 1_000));
 }
 
 function getNextRecoverableSpecialItem(state: GameState): SpecialItemKey | null {
@@ -973,6 +1206,19 @@ function absorbObstacleHit(state: GameState) {
   spawnSpecialItemBurst(state, state.player, lostItem, "loss");
   const feedback = getLostSpecialItemText(lostItem);
   state.scorePopups.push(createScorePopup(feedback.text, feedback.color, W / 2, 74, feedback.variant));
+  return true;
+}
+
+function stripAllSpecialItems(state: GameState) {
+  const lostItems = SPECIAL_ITEM_LOSS_ORDER.filter((itemKey) => state.specialUnlocks[itemKey]);
+  if (lostItems.length === 0) return false;
+  lostItems.forEach((itemKey) => {
+    state.specialUnlocks[itemKey] = false;
+    spawnSpecialItemBurst(state, state.player, itemKey, "loss");
+  });
+  const canRecoverAnyLostItem = lostItems.some((itemKey) => state.specialMilestonesClaimed[itemKey]);
+  state.nextSpecialRecoveryDistance = canRecoverAnyLostItem ? state.distance + SPECIAL_ITEM_RECOVERY_DISTANCE : null;
+  state.player.invulnerableMs = DAMAGE_INVULNERABILITY_MS;
   return true;
 }
 
@@ -1020,11 +1266,72 @@ function createQuizFeedback(outcome: QuizOutcome): QuizFeedback {
 function createHyperPowerFeedback(): QuizFeedback {
   return {
     title: "HYPER POWER",
-    pointsText: "5s invulnerable",
+    pointsText: "7s invulnerable",
     color: "#7dd3fc",
     glow: "rgba(139, 92, 246, 0.34)",
     life: HYPER_POWER_FEEDBACK_DURATION_MS,
     totalLife: HYPER_POWER_FEEDBACK_DURATION_MS,
+  };
+}
+
+function getObstacleBreakColors(obstacleType: ObstacleType) {
+  switch (obstacleType) {
+    case "prefectura":
+      return ["#c7b28b", "#9d8a68", "#f3e3bf", "#ffffff"] as const;
+    case "etios":
+      return ["#eff3f7", "#bac4ce", "#5cc8ff", "#221b6f"] as const;
+    case "barrels":
+      return ["#e33f36", "#b92822", "#fca5a5", "#ffffff"] as const;
+    case "forklift":
+      return ["#f0c61f", "#39556d", "#fde68a", "#ffffff"] as const;
+    case "container":
+      return ["#1678c7", "#0a5189", "#93c5fd", "#ffffff"] as const;
+    case "suitcase":
+      return ["#87d76a", "#63a94f", "#dcfce7", "#ffffff"] as const;
+    case "poison":
+      return ["#ef4444", "#111111", "#fca5a5", "#ffffff"] as const;
+    case "ypfTruck":
+      return ["#1178c9", "#dce2e8", "#d3473f", "#ffffff"] as const;
+    default:
+      return ["#f8fafc", "#cbd5e1", "#94a3b8", "#ffffff"] as const;
+  }
+}
+
+function spawnObstacleBreakBurst(state: GameState, obstacle: Obstacle, worldTime: number) {
+  const impactX = getAnimatedObstacleX(obstacle, worldTime) + obstacle.w / 2;
+  const impactY = getAnimatedObstacleY(obstacle, worldTime) + obstacle.h / 2;
+  const colors = getObstacleBreakColors(obstacle.type);
+  for (let index = 0; index < 22; index += 1) {
+    state.particles.push(
+      makeSpecialSparkParticle(
+        impactX + (Math.random() - 0.5) * 16,
+        impactY + (Math.random() - 0.5) * 14,
+        pick([...colors])
+      )
+    );
+  }
+}
+
+function createMatePowerFeedback(): QuizFeedback {
+  return {
+    title: "MATE POWER",
+    pointsText: "Todos los items",
+    color: "#facc15",
+    glow: "rgba(250, 204, 21, 0.4)",
+    life: MATE_POWER_FEEDBACK_DURATION_MS,
+    totalLife: MATE_POWER_FEEDBACK_DURATION_MS,
+  };
+}
+
+function createPoisonFeedback(): QuizFeedback {
+  return {
+    title: "POISON",
+    pointsText: "Todos los items perdidos",
+    color: "#f8fafc",
+    glow: "rgba(239, 68, 68, 0.4)",
+    icon: "skull",
+    life: POISON_FEEDBACK_DURATION_MS,
+    totalLife: POISON_FEEDBACK_DURATION_MS,
   };
 }
 
@@ -1035,12 +1342,57 @@ function updateQuizFeedback(quizFeedback: QuizFeedback | null, elapsedMs: number
 }
 
 function activateQuizHyperMode(state: GameState) {
-  if (state.player.hyperInvulnerableMs > 0) return;
   state.player.hyperInvulnerableMs = QUIZ_HYPER_INVULNERABILITY_MS;
+  state.screenShakeMs = MATE_POWER_SHAKE_MS;
   state.quizFeedback = createHyperPowerFeedback();
   spawnSpecialItemBurst(state, state.player, "cape", "unlock");
   spawnSpecialItemBurst(state, state.player, "cap", "unlock");
   state.scorePopups.push(createScorePopup("HYPER!", "#7dd3fc"));
+}
+
+function activateMatePower(state: GameState) {
+  const alreadyPowered = state.player.matePowerMs > 0;
+  const currentMateOffset = state.player.x - PLAYER_BASE_X;
+  SPECIAL_ITEM_GAIN_ORDER.forEach((itemKey) => {
+    state.specialMilestonesClaimed[itemKey] = true;
+    state.specialUnlocks[itemKey] = true;
+    spawnSpecialItemBurst(state, state.player, itemKey, "unlock");
+  });
+  const metrics = getPlayerMetrics(state.player);
+  const centerX = state.player.x + metrics.width / 2;
+  const centerY = metrics.top + metrics.height / 2;
+  for (let index = 0; index < 28; index += 1) {
+    state.particles.push(
+      makeSpecialSparkParticle(
+        centerX + (Math.random() - 0.5) * 20,
+        centerY + (Math.random() - 0.5) * 22,
+        pick([...MATE_POWER_DIVINE_COLORS])
+      )
+    );
+  }
+  for (let index = 0; index < 18; index += 1) {
+    state.particles.push(
+      makeConfettiParticle(
+        centerX + (Math.random() - 0.5) * 34,
+        centerY - 10 + (Math.random() - 0.5) * 18,
+        pick([...MATE_POWER_DIVINE_COLORS])
+      )
+    );
+  }
+  state.player.matePowerMs = MATE_POWER_GLOW_MS;
+  state.player.matePowerChainShiftMs = alreadyPowered
+    ? MATE_POWER_CHAIN_X_SHIFT_IN_MS + MATE_POWER_CHAIN_X_SHIFT_OUT_MS
+    : 0;
+  state.player.matePowerLockedOffset = alreadyPowered ? currentMateOffset : 0;
+  state.nextSpecialRecoveryDistance = null;
+  state.pendingMatePowerBonusSpawnMs =
+    Math.random() < BONUS_MATE_POWER_SPAWN_CHANCE
+      ? BONUS_MATE_POWER_SPAWN_MIN_MS +
+        Math.random() * (BONUS_MATE_POWER_SPAWN_MAX_MS - BONUS_MATE_POWER_SPAWN_MIN_MS)
+      : null;
+  state.screenShakeMs = MATE_POWER_SHAKE_MS;
+  state.quizFeedback = createMatePowerFeedback();
+  state.scorePopups.push(createScorePopup("MATE POWER", "#fde68a", W / 2, 70, "divine"));
 }
 
 function launchQuizConfetti(state: GameState, title: string) {
@@ -1082,9 +1434,14 @@ function setSpeedDrop(player: PlayerState) {
 }
 
 function drawRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, color: string) {
-  const hyperState = activeRunnerHyperRender;
-  const shouldUseHyper = hyperState && (!hyperState.warning || Math.sin(hyperState.worldTime * 0.1) > -0.18);
-  ctx.fillStyle = shouldUseHyper && hyperState ? getHyperPaletteColor(color, hyperState.worldTime, x, y) : color;
+  const auraState = activeRunnerAuraRender;
+  const shouldUseAura = auraState && (auraState.mode === "mate" || !auraState.warning || Math.sin(auraState.worldTime * 0.1) > -0.18);
+  ctx.fillStyle =
+    shouldUseAura && auraState
+      ? auraState.mode === "mate"
+        ? getMatePowerPaletteColor(color, auraState.worldTime, x, y)
+        : getHyperPaletteColor(color, auraState.worldTime, x, y)
+      : color;
   ctx.fillRect(Math.round(x), Math.round(y), Math.round(w), Math.round(h));
 }
 
@@ -1389,15 +1746,44 @@ function drawForklift(ctx: CanvasRenderingContext2D, x: number, y: number) {
 }
 
 function drawSuitcase(ctx: CanvasRenderingContext2D, x: number, y: number) {
-  drawRect(ctx, x + 2, y + 2, 12, 18, COLORS.suitcaseOutline);
-  drawRect(ctx, x + 3, y + 3, 10, 16, COLORS.suitcaseGreen);
-  drawRect(ctx, x + 5, y - 1, 6, 4, COLORS.suitcaseOutline);
-  drawRect(ctx, x + 6, y, 4, 3, COLORS.suitcaseHandle);
-  drawRect(ctx, x + 5, y + 6, 1, 10, COLORS.suitcaseGreenDark);
-  drawRect(ctx, x + 8, y + 6, 1, 10, COLORS.suitcaseGreenDark);
-  drawRect(ctx, x + 11, y + 6, 1, 10, COLORS.suitcaseGreenDark);
-  drawRect(ctx, x + 4, y + 20, 2, 2, COLORS.suitcaseWheel);
-  drawRect(ctx, x + 10, y + 20, 2, 2, COLORS.suitcaseWheel);
+  const body = "#9a6239";
+  const bodyShade = "#7e4a2b";
+  const sideLight = "#da9453";
+  const sideMid = "#be7944";
+  const strap = "#5a3624";
+  const handle = "#6d4128";
+  const clasp = "#ffd161";
+  const claspShade = "#d7a24d";
+
+  drawRect(ctx, x + 3, y + 1, 10, 20, body);
+  drawRect(ctx, x + 2, y + 2, 2, 18, sideLight);
+  drawRect(ctx, x + 4, y + 2, 1, 18, sideMid);
+  drawRect(ctx, x + 12, y + 2, 1, 18, bodyShade);
+
+  drawRect(ctx, x + 3, y + 5, 10, 2, strap);
+  drawRect(ctx, x + 3, y + 16, 10, 2, strap);
+
+  drawRect(ctx, x + 1, y + 9, 2, 1, handle);
+  drawRect(ctx, x + 1, y + 14, 2, 1, handle);
+  drawRect(ctx, x + 0, y + 10, 1, 4, handle);
+  drawRect(ctx, x + 3, y + 10, 1, 4, handle);
+  drawRect(ctx, x + 1, y + 10, 1, 4, "#e2ddd6");
+
+  drawRect(ctx, x + 2, y + 6, 2, 2, clasp);
+  drawRect(ctx, x + 2, y + 17, 2, 2, clasp);
+  drawRect(ctx, x + 2, y + 8, 2, 1, claspShade);
+  drawRect(ctx, x + 2, y + 19, 2, 1, claspShade);
+
+  drawRect(ctx, x + 5, y + 2, 6, 2, "#aa6f40");
+  drawRect(ctx, x + 5, y + 18, 6, 1, "#8d5833");
+}
+
+function drawPoison(ctx: CanvasRenderingContext2D, obstacle: Obstacle, worldTime: number) {
+  const x = getAnimatedObstacleX(obstacle, worldTime);
+  const y = getAnimatedObstacleY(obstacle, worldTime);
+  const sprite = getPoisonSpriteImage();
+  if (!sprite || !sprite.complete || sprite.naturalWidth === 0) return;
+  ctx.drawImage(sprite, x, y, obstacle.w, obstacle.h);
 }
 
 function drawYpfTruck(ctx: CanvasRenderingContext2D, x: number, y: number) {
@@ -1465,7 +1851,7 @@ function drawSparkle(ctx: CanvasRenderingContext2D, x: number, y: number, size: 
 }
 
 function drawQuizStar(ctx: CanvasRenderingContext2D, obstacle: Obstacle, worldTime: number) {
-  const x = obstacle.x;
+  const x = getAnimatedObstacleX(obstacle, worldTime);
   const y = getAnimatedObstacleY(obstacle, worldTime);
   const scale = obstacle.w / QUIZ_STAR_SIZE;
   const px = (value: number) => Math.round(value * scale);
@@ -1510,17 +1896,54 @@ function drawQuizStar(ctx: CanvasRenderingContext2D, obstacle: Obstacle, worldTi
   drawSparkle(ctx, x + px(24), starY + px(17), Math.max(1, px(1)), 0.82);
 }
 
+function drawMatePower(ctx: CanvasRenderingContext2D, obstacle: Obstacle, worldTime: number) {
+  const x = getAnimatedObstacleX(obstacle, worldTime);
+  const y = getAnimatedObstacleY(obstacle, worldTime);
+  const scale = obstacle.w / MATE_POWER_SIZE;
+  const px = (value: number) => Math.max(1, Math.round(value * scale));
+  const previousAlpha = ctx.globalAlpha;
+
+  for (let index = 0; index < 6; index += 1) {
+    const color = MATE_POWER_TRAIL_COLORS[index % MATE_POWER_TRAIL_COLORS.length]!;
+    const alpha = 0.18 - index * 0.022;
+    ctx.globalAlpha = Math.max(0.04, alpha);
+    const trailX = x + px(28 + index * 2.8);
+    const trailY = y + Math.round(18 * scale) + Math.round(Math.sin(worldTime * 0.02 + obstacle.bob + index * 0.75) * (1.2 + index * 0.15));
+    drawRect(ctx, trailX, trailY, px(4), px(1), color);
+    drawRect(ctx, trailX + px(1), trailY - px(1), px(2), px(1), color);
+    drawRect(ctx, trailX + px(1), trailY + px(1), px(2), px(1), color);
+  }
+  ctx.globalAlpha = previousAlpha;
+  const sprite = getMateSpriteImage();
+  if (!sprite || !sprite.complete || sprite.naturalWidth === 0) return;
+  ctx.drawImage(sprite, x, y, obstacle.w, obstacle.h);
+}
+
 function drawObstacle(ctx: CanvasRenderingContext2D, obstacle: Obstacle, worldTime: number) {
-  const x = obstacle.x;
+  const x = getAnimatedObstacleX(obstacle, worldTime);
   const y = getAnimatedObstacleY(obstacle, worldTime);
   if (obstacle.type === "quizStar") drawQuizStar(ctx, obstacle, worldTime);
+  else if (obstacle.type === "matePower") drawMatePower(ctx, obstacle, worldTime);
+  else if (obstacle.type === "poison") drawPoison(ctx, obstacle, worldTime);
   else if (obstacle.type === "prefectura") drawPrefectura(ctx, x, y);
   else if (obstacle.type === "etios") drawEtios(ctx, x, y);
   else if (obstacle.type === "barrels") drawBarrels(ctx, x, y);
   else if (obstacle.type === "container") drawContainer(ctx, x, y);
-  else if (obstacle.type === "forklift") drawForklift(ctx, x, y);
+  else if (obstacle.type === "forklift") {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.scale(FORKLIFT_SCALE, FORKLIFT_SCALE);
+    drawForklift(ctx, 0, 0);
+    ctx.restore();
+  }
   else if (obstacle.type === "ypfTruck") drawYpfTruck(ctx, x, y);
-  else drawSuitcase(ctx, x, y);
+  else {
+    ctx.save();
+    ctx.translate(x + obstacle.w / 2, y + obstacle.h / 2);
+    ctx.rotate(-(worldTime * 0.006 + obstacle.bob * 0.18));
+    drawSuitcase(ctx, -obstacle.w / 2, -obstacle.h / 2);
+    ctx.restore();
+  }
 }
 
 function drawParticle(ctx: CanvasRenderingContext2D, particle: Particle) {
@@ -2088,6 +2511,52 @@ function drawRunnerSpecials(
   if (specialUnlocks.cap) drawSpecialCap(ctx, player, worldTime);
 }
 
+function drawPowerBars(ctx: CanvasRenderingContext2D, player: PlayerState, worldTime: number) {
+  const { top } = getRunnerPhase(player, worldTime);
+  const bars: Array<{
+    ratio: number;
+    bg: string;
+    edge: string;
+    fill: string;
+    shine: string;
+  }> = [];
+
+  if (player.matePowerMs > 0) {
+    bars.push({
+      ratio: clamp(player.matePowerMs / MATE_POWER_GLOW_MS, 0, 1),
+      bg: "rgba(76, 47, 10, 0.78)",
+      edge: "#7a4a10",
+      fill: "#facc15",
+      shine: "#fff7c2",
+    });
+  }
+
+  if (player.hyperInvulnerableMs > 0) {
+    bars.push({
+      ratio: clamp(player.hyperInvulnerableMs / QUIZ_HYPER_INVULNERABILITY_MS, 0, 1),
+      bg: "rgba(19, 18, 58, 0.78)",
+      edge: "#312e81",
+      fill: getHyperPaletteColor("#67e8f9", worldTime + 40),
+      shine: getHyperPaletteColor("#ffffff", worldTime + 120),
+    });
+  }
+
+  const baseY = top - 10 - (bars.length - 1) * 5;
+  bars.forEach((bar, index) => {
+    const barY = baseY + index * 5;
+    drawRect(ctx, player.x - 3, barY, 23, 3, bar.bg);
+    drawRect(ctx, player.x - 4, barY - 1, 25, 1, bar.edge);
+    drawRect(ctx, player.x - 4, barY + 3, 25, 1, "rgba(15, 23, 42, 0.45)");
+    const fillWidth = Math.max(0, Math.round(21 * bar.ratio));
+    if (fillWidth > 0) {
+      drawRect(ctx, player.x - 2, barY + 1, fillWidth, 1, bar.fill);
+      if (fillWidth > 2) {
+        drawRect(ctx, player.x - 2, barY, fillWidth - 1, 1, bar.shine);
+      }
+    }
+  });
+}
+
 function drawRunnerCore(
   ctx: CanvasRenderingContext2D,
   player: PlayerState,
@@ -2134,17 +2603,32 @@ function drawRunner(
   const previousAlpha = ctx.globalAlpha;
   const damageInvulnerable = player.invulnerableMs > 0;
   const hyperInvulnerable = player.hyperInvulnerableMs > 0;
+  const matePowerActive = player.matePowerMs > 0;
+  const argentoActive = specialUnlocks.cape || matePowerActive;
   if (damageInvulnerable) {
     ctx.globalAlpha = Math.sin(worldTime * 0.05) > 0 ? 0.38 : 0.96;
   }
-  activeRunnerHyperRender = hyperInvulnerable
+  activeRunnerAuraRender = matePowerActive
     ? {
         worldTime,
-        warning: player.hyperInvulnerableMs <= QUIZ_HYPER_WARNING_MS,
+        warning: false,
+        mode: "mate",
       }
-    : null;
+    : hyperInvulnerable
+      ? {
+          worldTime,
+          warning: player.hyperInvulnerableMs <= QUIZ_HYPER_WARNING_MS,
+          mode: "hyper",
+        }
+      : null;
+  if (argentoActive) {
+    drawArgentoOrbitParticles(ctx, player, worldTime);
+  }
   drawRunnerCore(ctx, player, worldTime, characterId, specialUnlocks);
-  activeRunnerHyperRender = null;
+  activeRunnerAuraRender = null;
+  if (matePowerActive || hyperInvulnerable) {
+    drawPowerBars(ctx, player, worldTime);
+  }
   if (player.invulnerableMs > 0) {
     const { top } = getRunnerPhase(player, worldTime);
     const shimmer = Math.sin(worldTime * 0.042) > 0 ? "#f8fbff" : "#74acdf";
@@ -2183,6 +2667,9 @@ function RunnerPreview({ characterId, active }: { characterId: string; active: b
         speedDrop: false,
         invulnerableMs: 0,
         hyperInvulnerableMs: 0,
+        matePowerMs: 0,
+        matePowerChainShiftMs: 0,
+        matePowerLockedOffset: 0,
       },
       2000,
       characterId
@@ -2224,28 +2711,47 @@ function drawScorePopups(ctx: CanvasRenderingContext2D, state: GameState) {
   ctx.textBaseline = "middle";
   ctx.font = "bold 11px monospace";
   for (const popup of state.scorePopups) {
-    const progress = 1 - popup.life / popup.totalLife;
-    const fadeIn = clamp(progress / 0.14, 0, 1);
-    const fadeOut = clamp(popup.life / (popup.totalLife * 0.42), 0, 1);
+    const holdMs = popup.holdMs ?? 0;
+    const fadeLife = Math.max(1, popup.totalLife - holdMs);
+    const elapsedMs = popup.totalLife - popup.life;
+    const progress = clamp(Math.max(0, elapsedMs - holdMs) / fadeLife, 0, 1);
+    const fadeIn = clamp(elapsedMs / (fadeLife * 0.14), 0, 1);
+    const fadeOut = popup.life > holdMs ? 1 : clamp(popup.life / (fadeLife * 0.42), 0, 1);
     ctx.globalAlpha = Math.min(fadeIn, fadeOut);
     if (popup.variant === "argento") {
       const pulse = 1 + Math.sin(progress * Math.PI * 6) * 0.03;
       const fontSize = Math.round(13 * pulse);
       ctx.font = `bold ${fontSize}px monospace`;
-      ctx.shadowBlur = 7;
-      ctx.shadowColor = "rgba(191, 219, 254, 0.7)";
-      ctx.fillStyle = "#f8fbff";
+      ctx.shadowBlur = 0;
+      ctx.shadowColor = "transparent";
+    } else if (popup.variant === "divine") {
+      const pulse = 1 + Math.sin(progress * Math.PI * 8) * 0.05;
+      const fontSize = Math.round(14 * pulse);
+      ctx.font = `bold ${fontSize}px monospace`;
+      ctx.shadowBlur = 9;
+      ctx.shadowColor = "rgba(250, 204, 21, 0.8)";
+      ctx.fillStyle = "#fff7c2";
     } else {
       ctx.font = "bold 11px monospace";
       ctx.shadowBlur = 0;
       ctx.shadowColor = "transparent";
       ctx.fillStyle = popup.color;
     }
-    ctx.fillText(popup.text, popup.x, popup.y);
     if (popup.variant === "argento") {
-      ctx.globalAlpha *= 0.85;
-      ctx.fillStyle = "#6bb1fc";
+      ctx.fillStyle = "#f8fbff";
+      ctx.fillText(popup.text, popup.x - 1, popup.y);
+      ctx.fillText(popup.text, popup.x + 1, popup.y);
+      ctx.fillText(popup.text, popup.x, popup.y - 1);
       ctx.fillText(popup.text, popup.x, popup.y + 1);
+      ctx.fillStyle = "#18477f";
+      ctx.fillText(popup.text, popup.x, popup.y);
+    } else if (popup.variant === "divine") {
+      ctx.fillText(popup.text, popup.x, popup.y);
+      ctx.globalAlpha *= 0.82;
+      ctx.fillStyle = "#f59e0b";
+      ctx.fillText(popup.text, popup.x, popup.y + 1);
+    } else {
+      ctx.fillText(popup.text, popup.x, popup.y);
     }
   }
   ctx.globalAlpha = previousAlpha;
@@ -2267,21 +2773,122 @@ function drawQuizFeedback(ctx: CanvasRenderingContext2D, state: GameState) {
   const fadeIn = clamp(progress / 0.16, 0, 1);
   const fadeOut = clamp(feedback.life / (feedback.totalLife * 0.42), 0, 1);
   const alpha = Math.min(fadeIn, fadeOut);
-  const y = 48 - progress * 6;
+  const y = feedback.icon === "skull" ? 58 - progress * 6 : 48 - progress * 6;
   const width = Math.max(152, feedback.title.length * 8 + 34);
+  const boxHeight = feedback.icon === "skull" ? 54 : 36;
   const left = (W - width) / 2;
 
   ctx.globalAlpha = alpha;
-  drawRect(ctx, left, y - 18, width, 36, "rgba(15, 23, 42, 0.88)");
-  drawRect(ctx, left, y - 18, width, 5, feedback.glow);
+  drawRect(ctx, left, y - boxHeight / 2, width, boxHeight, "rgba(15, 23, 42, 0.88)");
+  drawRect(ctx, left, y - boxHeight / 2, width, 5, feedback.glow);
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
+  if (feedback.icon === "skull") {
+    const skullSprite = getSkullSpriteImage();
+    if (skullSprite && skullSprite.complete && skullSprite.naturalWidth > 0) {
+      ctx.drawImage(skullSprite, W / 2 - 14, y - 26, 28, 28);
+    }
+  }
   ctx.fillStyle = feedback.color;
   ctx.font = "bold 13px monospace";
-  ctx.fillText(feedback.title, W / 2, y - 2);
+  ctx.fillText(feedback.title, W / 2, feedback.icon === "skull" ? y + 12 : y - 2);
   ctx.font = "bold 8px monospace";
-  ctx.fillText(feedback.pointsText, W / 2, y + 10);
+  ctx.fillText(feedback.pointsText, W / 2, feedback.icon === "skull" ? y + 24 : y + 10);
   ctx.globalAlpha = previousAlpha;
+  ctx.textAlign = previousAlign;
+  ctx.textBaseline = previousBaseline;
+}
+
+function drawArgentoOrbitParticles(ctx: CanvasRenderingContext2D, player: PlayerState, worldTime: number) {
+  const metrics = getPlayerMetrics(player);
+  const orbitCenterX = player.x + metrics.width / 2;
+  const orbitCenterY = metrics.top + metrics.height / 2;
+  const orbitRadius = metrics.ducking ? 12 : 15;
+  const orbitLayers = [
+    { speed: 0.0105, tilt: 0.38, phase: 0.1, color: "#74acdf" },
+    { speed: -0.008, tilt: 0.72, phase: 1.6, color: "#f8fbff" },
+    { speed: 0.0125, tilt: 1.14, phase: 2.7, color: "#dbeafe" },
+    { speed: -0.0095, tilt: 1.82, phase: 3.9, color: "#74acdf" },
+    { speed: 0.007, tilt: 2.36, phase: 4.7, color: "#f8fbff" },
+  ] as const;
+
+  ctx.save();
+  orbitLayers.forEach((layer, index) => {
+    const angle = worldTime * layer.speed + layer.phase;
+    const depth = Math.sin(angle + layer.tilt);
+    const lift = Math.cos(angle * 1.18 + layer.tilt) * 0.34;
+    const projectedYScale = 0.42 + Math.abs(Math.sin(layer.tilt + worldTime * 0.0015)) * 0.28;
+    const radius = orbitRadius + Math.cos(angle * 0.7 + index) * 1.3;
+    const px = Math.round(orbitCenterX + Math.cos(angle) * radius);
+    const py = Math.round(orbitCenterY + (depth * projectedYScale + lift) * radius);
+    const size = depth > 0.2 ? 2 : 1;
+    const previousAlpha = ctx.globalAlpha;
+    ctx.globalAlpha = 0.38 + ((depth + 1) / 2) * 0.58;
+    drawRect(ctx, px, py, size, size, layer.color);
+    if (size > 1) {
+      drawRect(ctx, px + 1, py + 1, 1, 1, layer.color);
+    }
+    if (depth > 0.55) {
+      drawRect(ctx, px - 1, py, 1, 1, "#ffffff");
+    }
+    ctx.globalAlpha = previousAlpha;
+  });
+  for (let index = 0; index < 5; index += 1) {
+    const angle = -worldTime * (0.0065 + index * 0.0008) + index * 1.11;
+    const depth = Math.cos(angle * 1.07);
+    const radius = orbitRadius - 2 + Math.sin(angle * 0.9 + index) * 1.8;
+    const px = Math.round(orbitCenterX + Math.cos(angle + index * 0.3) * radius);
+    const py = Math.round(orbitCenterY + Math.sin(angle * 0.92 + index) * radius * 0.55);
+    const color = orbitLayers[index % orbitLayers.length]!.color;
+    const previousAlpha = ctx.globalAlpha;
+    ctx.globalAlpha = 0.28 + ((depth + 1) / 2) * 0.36;
+    drawRect(ctx, px, py, 1, 1, color);
+    drawRect(ctx, px - 1, py, 3, 1, color);
+    drawRect(ctx, px, py - 1, 1, 3, color);
+    ctx.globalAlpha = previousAlpha;
+  }
+  ctx.restore();
+}
+
+function drawHyperDestroyAlert(ctx: CanvasRenderingContext2D, state: GameState) {
+  const hyperActive = state.player.hyperInvulnerableMs > 0;
+  const mateActive = state.player.matePowerMs > 0;
+  if (!hyperActive && !mateActive) return;
+
+  const pulse = (Math.sin(state.worldTime * 0.024) + 1) / 2;
+  const floatY = Math.sin(state.worldTime * 0.01) * 2;
+  const y = 58 + floatY;
+  const previousAlign = ctx.textAlign;
+  const previousBaseline = ctx.textBaseline;
+  const previousAlpha = ctx.globalAlpha;
+  const title = mateActive ? "MATE POWER" : "HYPER ACTIVO";
+  const message = mateActive ? "DESTRUYE OBJETOS!" : "DESTRUYE OBJETOS!";
+  const glowFill = mateActive ? "rgba(250, 204, 21, 0.3)" : "rgba(251, 191, 36, 0.28)";
+  const shadowColor = mateActive ? "#fff7c2" : "#fff7c2";
+  const mainColor = mateActive ? mixColor("#facc15", "#f59e0b", pulse * 0.5) : mixColor("#facc15", "#f97316", pulse * 0.55);
+  const labelColor = mateActive ? mixColor("#fff7c2", "#fde047", pulse * 0.45) : mixColor("#fef08a", "#fde047", pulse * 0.4);
+
+  ctx.save();
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.globalAlpha = 0.2 + pulse * 0.28;
+  ctx.fillStyle = glowFill;
+  ctx.fillRect(W / 2 - 58, y - 11, 116, 18);
+
+  ctx.globalAlpha = 0.34 + pulse * 0.24;
+  ctx.fillStyle = shadowColor;
+  ctx.font = "bold 8px monospace";
+  ctx.fillText(message, W / 2, y + 1);
+
+  ctx.globalAlpha = previousAlpha;
+  ctx.fillStyle = mainColor;
+  ctx.font = "bold 8px monospace";
+  ctx.fillText(message, W / 2, y);
+  ctx.fillStyle = labelColor;
+  ctx.font = "6px monospace";
+  ctx.fillText(title, W / 2, y - 8);
+  ctx.restore();
+
   ctx.textAlign = previousAlign;
   ctx.textBaseline = previousBaseline;
 }
@@ -2300,6 +2907,7 @@ function drawHud(ctx: CanvasRenderingContext2D, state: GameState) {
   ctx.fillText("Jump: Space / Up", 14, 27);
   ctx.fillText("Quiz: 1 / 2 / 3", 138, 27);
   ctx.fillText("Duck: Down", 270, 27);
+  drawHyperDestroyAlert(ctx, state);
 }
 
 function drawQuizOverlay(ctx: CanvasRenderingContext2D, state: GameState) {
@@ -2336,16 +2944,18 @@ function runSelfChecks() {
   const latePool = obstaclePool(200);
   const container = latePool.find((item) => item.type === "container");
   const forklift = latePool.find((item) => item.type === "forklift");
+  const matePower = createMatePower();
   invariant(earlyPool.some((item) => item.type === "etios"), "Expected etios obstacle in early pool");
   invariant(latePool.some((item) => item.type === "suitcase"), "Suitcase obstacle should appear later");
-  invariant(!!container && !!forklift && container.h > forklift.h, "Container should be taller than forklift");
+  invariant(!!container && !!forklift && container.h >= forklift.h, "Container should be at least as tall as forklift");
+  invariant(matePower.type === "matePower" && matePower.w === MATE_POWER_SIZE, "Mate Power collectible should keep its configured size");
   invariant(Math.abs(START_SPEED - 4.32) < 0.001, "Initial speed should match Dino narrow-screen proportion");
   invariant(Math.abs(MAX_SPEED - 9.36) < 0.001, "Max speed should match Dino narrow-screen proportion");
   invariant(Math.abs(ACCEL_PER_FRAME - 0.00072) < 0.00001, "Acceleration should match Dino narrow-screen proportion");
   invariant(Math.abs(GRAVITY / BASE_GRAVITY - VERTICAL_SCALE) < 0.0001, "Vertical gravity must keep Dino proportions");
   invariant(Math.abs(INITIAL_JUMP_VELOCITY / BASE_INITIAL_JUMP_VELOCITY - VERTICAL_SCALE) < 0.0001, "Jump launch must keep Dino proportions");
   invariant(Math.abs(MAX_JUMP_RISE - 36) < 0.001, "Max jump rise should preserve a clearly taller held jump while keeping Dino-like proportions");
-  invariant(JSON.stringify(SUITCASE_FLYING_YPOS) === JSON.stringify([120, 105, 90]), "Flying obstacle heights should keep Dino-like proportions relative to the runner");
+  invariant(JSON.stringify(SUITCASE_FLYING_YPOS) === JSON.stringify([120, 102, 96]), "Flying obstacle heights should keep the three fixed gameplay lanes");
   invariant(QUIZ_QUESTIONS.every((question) => question.answers.length === 3), "Each quiz question should expose exactly three answers");
   invariant(QUIZ_QUESTIONS.every((question) => question.correctIndex >= 0 && question.correctIndex < 3), "Each quiz question must have a valid correct answer");
 }
@@ -2364,6 +2974,7 @@ export default function UshuaiaRunnerFlorPrototype() {
   const [phase, setPhase] = useState<Phase>("ready");
   const [distance, setDistance] = useState(0);
   const [best, setBest] = useState(0);
+  const [bestTotal, setBestTotal] = useState(0);
   const [score, setScore] = useState(0);
   const [selectedCharacter, setSelectedCharacter] = useState("flor");
   const [quizUi, setQuizUi] = useState<ActiveQuiz | null>(null);
@@ -2444,6 +3055,7 @@ export default function UshuaiaRunnerFlorPrototype() {
   const triggerQuiz = () => {
     const state = stateRef.current;
     if (state.phase !== "running") return;
+    if (state.player.hyperInvulnerableMs > 0 || state.player.matePowerMs > 0) return;
     keysRef.current.duckHeld = false;
     state.player.ducking = false;
     state.player.jumpHeld = false;
@@ -2498,10 +3110,13 @@ export default function UshuaiaRunnerFlorPrototype() {
 
   const resetGame = (startRunning = true) => {
     const bestDistance = Math.max(stateRef.current.bestDistance, stateRef.current.distance);
+    const currentTotal = Math.floor(stateRef.current.distance) + stateRef.current.score;
+    const bestTotal = Math.max(stateRef.current.bestTotal, currentTotal);
     const dayNightTime = stateRef.current.dayNightTime;
-    stateRef.current = { ...createInitialState(), bestDistance, dayNightTime, phase: startRunning ? "running" : "ready" };
+    stateRef.current = { ...createInitialState(), bestDistance, bestTotal, dayNightTime, phase: startRunning ? "running" : "ready" };
     submittedScoreRef.current = null;
     setBest(Math.floor(bestDistance));
+    setBestTotal(bestTotal);
     setDistance(0);
     setScore(0);
     setQuizUi(null);
@@ -2677,15 +3292,48 @@ export default function UshuaiaRunnerFlorPrototype() {
       state.dayNightTime += dtMs;
       state.scorePopups = updateScorePopups(state.scorePopups, dtMs, dt);
       state.quizFeedback = updateQuizFeedback(state.quizFeedback, dtMs);
+      state.screenShakeMs = Math.max(0, state.screenShakeMs - dtMs);
 
       if (state.phase === "running") {
         state.worldTime += dtMs;
-        state.speed = clamp(state.speed + ACCEL_PER_FRAME * (dtMs / FRAME_MS), START_SPEED, MAX_SPEED);
-        state.distance += state.speed * (dtMs / FRAME_MS);
+        const naturalNextSpeed = clamp(state.baseSpeed + ACCEL_PER_FRAME * (dtMs / FRAME_MS), START_SPEED, MAX_SPEED);
 
         const player = state.player;
         player.invulnerableMs = Math.max(0, player.invulnerableMs - dtMs);
         player.hyperInvulnerableMs = Math.max(0, player.hyperInvulnerableMs - dtMs);
+        player.matePowerMs = Math.max(0, player.matePowerMs - dtMs);
+        if (player.matePowerMs > 0 && state.pendingMatePowerBonusSpawnMs !== null) {
+          state.pendingMatePowerBonusSpawnMs = Math.max(0, state.pendingMatePowerBonusSpawnMs - dtMs);
+        } else if (player.matePowerMs <= 0) {
+          state.pendingMatePowerBonusSpawnMs = null;
+        }
+        player.matePowerChainShiftMs = Math.max(0, player.matePowerChainShiftMs - dtMs);
+        const mateBaseOffset =
+          player.matePowerLockedOffset > 0
+            ? getLockedMatePowerOffset(player.matePowerMs, player.matePowerLockedOffset)
+            : getMatePowerPlayerOffset(player.matePowerMs);
+        player.x =
+          PLAYER_BASE_X +
+          mateBaseOffset +
+          getMatePowerChainOffset(player.matePowerChainShiftMs);
+        if (player.matePowerMs <= 0) {
+          player.matePowerLockedOffset = 0;
+        }
+        const mateSpeedActive = player.matePowerMs > 0;
+        if (mateSpeedActive) {
+          const mateDecelerationWindowMs = 3_000;
+          if (player.matePowerMs > mateDecelerationWindowMs) {
+            state.speed = MAX_SPEED;
+          } else {
+            const decelerationRatio = clamp(player.matePowerMs / mateDecelerationWindowMs, 0, 1);
+            state.speed = state.baseSpeed + (MAX_SPEED - state.baseSpeed) * decelerationRatio;
+          }
+        } else {
+          state.baseSpeed = naturalNextSpeed;
+          state.speed = naturalNextSpeed;
+        }
+        state.sceneMotionTime += dtMs * (state.speed / START_SPEED);
+        state.distance += state.speed * (dtMs / FRAME_MS);
         SPECIAL_ITEM_GAIN_ORDER.forEach((itemKey) => {
           const threshold = SPECIAL_ITEM_THRESHOLDS[itemKey];
           if (!state.specialMilestonesClaimed[itemKey] && state.distance >= threshold) {
@@ -2746,6 +3394,42 @@ export default function UshuaiaRunnerFlorPrototype() {
             }
           });
         }
+        if (player.matePowerMs > 0 && Math.random() < 2.1 * dt) {
+          const emitter = getSpecialTrailEmitterPosition(player, state.worldTime);
+          const wave = Math.sin(state.worldTime * 0.03);
+          const bands = [
+            { yOffset: -4 + wave * 1.1, color: getMatePowerPaletteColor("#7a3118", state.worldTime) },
+            { yOffset: -1 + wave * 0.6, color: getMatePowerPaletteColor("#facc15", state.worldTime + 40) },
+            { yOffset: 2, color: getMatePowerPaletteColor("#fff7c2", state.worldTime + 80) },
+            { yOffset: 5 - wave * 0.8, color: getMatePowerPaletteColor("#f59e0b", state.worldTime + 120) },
+          ] as const;
+          bands.forEach((band, index) => {
+            const count = index === 1 || index === 2 ? 2 : 1;
+            for (let particleIndex = 0; particleIndex < count; particleIndex += 1) {
+              state.particles.push(
+                makeTrailDustParticle(
+                  emitter.x + 1 + Math.random() * 2,
+                  emitter.y + band.yOffset + (Math.random() - 0.5) * 1.2,
+                  band.color
+                )
+              );
+            }
+          });
+        }
+        state.obstacles.forEach((obstacle) => {
+          if (obstacle.type !== "matePower" || Math.random() >= 1.45 * dt) return;
+          const emitterX = getAnimatedObstacleX(obstacle, state.worldTime) + obstacle.w - 6;
+          const emitterY = getAnimatedObstacleY(obstacle, state.worldTime) + obstacle.h / 2 - 2;
+          MATE_POWER_TRAIL_COLORS.forEach((color, index) => {
+            state.particles.push(
+              makeTrailDustParticle(
+                emitterX + index,
+                emitterY + (index - 1) * 2 + (Math.random() - 0.5),
+                color
+              )
+            );
+          });
+        });
         const previousBottom = GROUND_Y - player.rise;
         const airborne = player.rise > 0 || player.vy !== 0;
         if (airborne) {
@@ -2778,25 +3462,60 @@ export default function UshuaiaRunnerFlorPrototype() {
         player.ducking = keysRef.current.duckHeld && player.rise === 0;
 
         const hasQuizStarOnScreen = state.obstacles.some((obstacle) => obstacle.type === "quizStar");
-        const hasGameplayObstaclesOnScreen = state.obstacles.some((obstacle) => obstacle.type !== "quizStar");
+        const hasMatePowerOnScreen = state.obstacles.some((obstacle) => obstacle.type === "matePower");
+        const hasPoisonOnScreen = state.obstacles.some((obstacle) => obstacle.type === "poison");
+        const hasCollectibleOnScreen = hasQuizStarOnScreen || hasMatePowerOnScreen;
+        const hasGameplayObstaclesOnScreen = state.obstacles.some(
+          (obstacle) => obstacle.type !== "quizStar" && obstacle.type !== "matePower"
+        );
         const enoughRoomBeforeNextObstacle = state.nextObstacleDistance - state.distance > 42;
         const canSpawnQuizStar =
-          !hasQuizStarOnScreen &&
+          !hasCollectibleOnScreen &&
           !hasGameplayObstaclesOnScreen &&
           enoughRoomBeforeNextObstacle &&
           state.distance >= state.nextStarDistance;
+        const canSpawnMatePower =
+          !hasMatePowerOnScreen &&
+          state.distance >= state.nextMatePowerDistance;
+        const canSpawnBonusMatePower =
+          !hasMatePowerOnScreen &&
+          player.matePowerMs > 0 &&
+          state.pendingMatePowerBonusSpawnMs !== null &&
+          state.pendingMatePowerBonusSpawnMs <= 0;
+        const canSpawnPoison =
+          !hasPoisonOnScreen &&
+          state.nextPoisonDistance !== null &&
+          state.distance >= state.nextPoisonDistance;
+
+        if (canSpawnMatePower || canSpawnBonusMatePower) {
+          state.obstacles.push(createMatePower());
+          if (canSpawnMatePower) {
+            state.nextMatePowerDistance = getNextMatePowerDistance(state.distance);
+          }
+          if (canSpawnBonusMatePower) {
+            state.pendingMatePowerBonusSpawnMs = null;
+          }
+        }
+
+        if (canSpawnPoison) {
+          state.obstacles.push(createPoison());
+          if (canSpawnPoison) {
+            state.nextPoisonDistance = state.distance + getNextPoisonDistance(0);
+          }
+        }
 
         if (canSpawnQuizStar) {
           state.obstacles.push(createQuizStar());
           state.nextStarDistance = getNextStarDistance(state.distance);
         } else if (!hasQuizStarOnScreen && state.distance >= state.nextObstacleDistance) {
-          const obstacle = createObstacle(state.distance);
+          const obstacle = createObstacle(state.distance, state.specialUnlocks.cape || player.matePowerMs > 0);
           state.obstacles.push(obstacle);
           state.nextObstacleDistance = state.distance + getNextObstacleGap(obstacle, state.speed);
         }
 
         for (const obstacle of state.obstacles) {
-          obstacle.x -= state.speed * (dtMs / FRAME_MS);
+          const obstacleSpeed = obstacle.type === "poison" ? state.speed * POISON_SPEED_MULTIPLIER : state.speed;
+          obstacle.x -= obstacleSpeed * (dtMs / FRAME_MS);
         }
         state.obstacles = state.obstacles.filter((obstacle) => obstacle.x + obstacle.w > -40);
 
@@ -2820,26 +3539,93 @@ export default function UshuaiaRunnerFlorPrototype() {
           (obstacle) => obstacle.type === "quizStar" && collides(player, obstacle, state.worldTime)
         );
         if (collectedStarIndex >= 0) {
+          const collectedStar = state.obstacles[collectedStarIndex]!;
           state.obstacles.splice(collectedStarIndex, 1);
-          triggerQuiz();
+          if (player.hyperInvulnerableMs > 0 || player.matePowerMs > 0) {
+            state.score += POWERED_STAR_SCORE;
+            state.scorePopups.push(
+              createScorePopup(
+                `+${POWERED_STAR_SCORE}`,
+                "#fde047",
+                getAnimatedObstacleX(collectedStar, state.worldTime) + collectedStar.w / 2,
+                getAnimatedObstacleY(collectedStar, state.worldTime) - 6,
+                "divine"
+              )
+            );
+          } else {
+            triggerQuiz();
+          }
         }
 
-        const damagingObstacle = state.obstacles.find(
-          (obstacle) => obstacle.type !== "quizStar" && collides(player, obstacle, state.worldTime)
+        const collectedMatePowerIndex = state.obstacles.findIndex(
+          (obstacle) => obstacle.type === "matePower" && collides(player, obstacle, state.worldTime)
         );
-        const playerFullyInvulnerable = player.invulnerableMs > 0 || player.hyperInvulnerableMs > 0;
-        if (state.phase === "running" && damagingObstacle && !playerFullyInvulnerable) {
-          if (absorbObstacleHit(state)) {
-            player.dead = false;
-            player.jumpHeld = false;
+        if (collectedMatePowerIndex >= 0) {
+          state.obstacles.splice(collectedMatePowerIndex, 1);
+          activateMatePower(state);
+        }
+
+        const obstacleBreakingInvulnerable = player.hyperInvulnerableMs > 0 || player.matePowerMs > 0;
+        const playerProtected = player.invulnerableMs > 0 || obstacleBreakingInvulnerable;
+        const poisonHitIndex = state.obstacles.findIndex(
+          (obstacle) => obstacle.type === "poison" && collides(player, obstacle, state.worldTime)
+        );
+        if (poisonHitIndex >= 0 && !obstacleBreakingInvulnerable && (player.matePowerMs > 0 || getTopSpecialHealth(state.specialUnlocks))) {
+          state.obstacles.splice(poisonHitIndex, 1);
+          stripAllSpecialItems(state);
+          player.matePowerMs = 0;
+          player.matePowerChainShiftMs = 0;
+          player.matePowerLockedOffset = 0;
+          player.invulnerableMs = Math.max(player.invulnerableMs, POISON_INVULNERABILITY_MS);
+          state.pendingMatePowerBonusSpawnMs = null;
+          state.quizFeedback = createPoisonFeedback();
+          state.screenShakeMs = Math.max(state.screenShakeMs, POISON_SHAKE_MS);
+        }
+
+        const damagingObstacleIndex = state.obstacles.findIndex(
+          (obstacle) =>
+            obstacle.type !== "quizStar" &&
+            obstacle.type !== "matePower" &&
+            collides(player, obstacle, state.worldTime)
+        );
+        if (state.phase === "running" && damagingObstacleIndex >= 0) {
+          const damagingObstacle = state.obstacles[damagingObstacleIndex]!;
+          if (obstacleBreakingInvulnerable) {
+            state.obstacles.splice(damagingObstacleIndex, 1);
+            spawnObstacleBreakBurst(state, damagingObstacle, state.worldTime);
+            const breakScore = damagingObstacle.type === "ypfTruck" ? TRUCK_BREAK_SCORE : OBSTACLE_BREAK_SCORE;
+            state.score += breakScore;
+            state.scorePopups.push(
+              createScorePopup(
+                `+${breakScore}`,
+                damagingObstacle.type === "ypfTruck" ? "#facc15" : "#f8fbff",
+                getAnimatedObstacleX(damagingObstacle, state.worldTime) + damagingObstacle.w / 2,
+                getAnimatedObstacleY(damagingObstacle, state.worldTime) - 6,
+                damagingObstacle.type === "ypfTruck" ? "divine" : "default"
+              )
+            );
+            setScore(state.score);
+            state.screenShakeMs = Math.max(
+              state.screenShakeMs,
+              damagingObstacle.type === "ypfTruck" ? TRUCK_BREAK_SHAKE_MS : OBSTACLE_BREAK_SHAKE_MS
+            );
           } else {
-            state.phase = "gameover";
-            player.dead = true;
-            player.jumpHeld = false;
-            state.bestDistance = Math.max(state.bestDistance, state.distance);
-            setBest(Math.floor(state.bestDistance));
-            setPhase("gameover");
+            if (!playerProtected) {
+              if (absorbObstacleHit(state)) {
+                player.dead = false;
+                player.jumpHeld = false;
+            } else {
+              state.phase = "gameover";
+              player.dead = true;
+              player.jumpHeld = false;
+              state.bestDistance = Math.max(state.bestDistance, state.distance);
+              state.bestTotal = Math.max(state.bestTotal, Math.floor(state.distance) + state.score);
+              setBest(Math.floor(state.bestDistance));
+              setBestTotal(state.bestTotal);
+              setPhase("gameover");
+            }
           }
+        }
         }
 
         setDistance(Math.floor(state.distance));
@@ -2856,6 +3642,9 @@ export default function UshuaiaRunnerFlorPrototype() {
         }
       } else {
         state.worldTime += dtMs * 0.42;
+        state.sceneMotionTime += dtMs * 0.42;
+        state.player.x = PLAYER_BASE_X;
+        state.player.matePowerLockedOffset = 0;
         state.player.ducking = keysRef.current.duckHeld && state.phase === "ready";
         state.bestDistance = Math.max(state.bestDistance, state.distance);
       }
@@ -2869,14 +3658,24 @@ export default function UshuaiaRunnerFlorPrototype() {
       ctx.imageSmoothingEnabled = false;
       ctx.setTransform(scale, 0, 0, scale, 0, 0);
       ctx.clearRect(0, 0, W, H);
-      drawBackground(ctx, state.worldTime, state.dayNightTime);
+      ctx.save();
+      if (state.screenShakeMs > 0) {
+        const shakeStrength = (Math.min(state.screenShakeMs, MATE_POWER_SHAKE_MS) / MATE_POWER_SHAKE_MS) * 3.2;
+        const shakeX = (Math.random() - 0.5) * shakeStrength;
+        const shakeY = (Math.random() - 0.5) * shakeStrength * 0.8;
+        ctx.translate(shakeX, shakeY);
+      }
+      ctx.save();
+      drawBackground(ctx, state.sceneMotionTime, state.dayNightTime);
       state.obstacles.forEach((obstacle) => drawObstacle(ctx, obstacle, state.worldTime));
       state.particles.forEach((particle) => drawParticle(ctx, particle));
       drawRunner(ctx, state.player, state.worldTime, selectedCharacterRef.current, state.specialUnlocks);
-      drawHud(ctx, state);
       drawScorePopups(ctx, state);
+      ctx.restore();
+      drawHud(ctx, state);
       if (state.phase !== "running") drawOverlay(ctx, state);
       drawQuizFeedback(ctx, state);
+      ctx.restore();
       rafRef.current = requestAnimationFrame(tick);
     };
 
@@ -2888,6 +3687,8 @@ export default function UshuaiaRunnerFlorPrototype() {
     ? QUIZ_QUESTIONS[quizUi.questionIndex] ?? null
     : null;
   const quizTimeRatio = quizUi ? Math.max(0, Math.min(1, quizUi.remainingMs / QUIZ_DURATION_MS)) : 0;
+
+  const totalPoints = distance + score;
 
   return (
     <div className="app-shell">
@@ -3099,9 +3900,23 @@ export default function UshuaiaRunnerFlorPrototype() {
                           }}
                         >
                           <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.08em", color: "#94a3b8" }}>
+                            Total
+                          </div>
+                          <div style={{ marginTop: 6, fontSize: 24, fontWeight: 700, color: "#ffffff" }}>{totalPoints}</div>
+                        </div>
+                        <div
+                          style={{
+                            minWidth: 92,
+                            borderRadius: 16,
+                            background: "#1e293b",
+                            padding: "12px 14px",
+                            color: "#e2e8f0",
+                          }}
+                        >
+                          <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.08em", color: "#94a3b8" }}>
                             Mejor
                           </div>
-                          <div style={{ marginTop: 6, fontSize: 24, fontWeight: 700, color: "#ffffff" }}>{best}</div>
+                          <div style={{ marginTop: 6, fontSize: 24, fontWeight: 700, color: "#ffffff" }}>{bestTotal}</div>
                         </div>
                       </div>
                       <button
