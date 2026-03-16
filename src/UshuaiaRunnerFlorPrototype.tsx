@@ -16,7 +16,7 @@ type ObstacleType =
   | "ypfTruck"
   | "quizStar"
   | "matePower";
-type Phase = "ready" | "running" | "quiz" | "gameover";
+type Phase = "ready" | "running" | "quiz" | "ending" | "gameover";
 
 type PlayerState = {
   x: number;
@@ -155,6 +155,9 @@ type GameState = {
   pendingMatePowerBonusSpawnMs: number | null;
   quizCorrectStreak: number;
   screenShakeMs: number;
+  endingQueued: boolean;
+  endingMs: number;
+  endingStartSpeed: number;
 };
 
 const W = 360;
@@ -234,6 +237,17 @@ const OBSTACLE_BREAK_SCORE = 1000;
 const TRUCK_BREAK_SCORE = 5000;
 const POWERED_STAR_SCORE = 2500;
 const POISON_INVULNERABILITY_MS = 3_000;
+const ENDING_TRIGGER_DISTANCE = 250_000;
+const ENDING_DECELERATION_MS = 3_000;
+const ENDING_PLAYER_TARGET_X = 274;
+const ENDING_CELEBRATION_GATHER_START_MS = 3_600;
+const ENDING_CELEBRATION_GATHER_DURATION_MS = 1_400;
+const ENDING_CELEBRATION_JUMP_START_MS = ENDING_CELEBRATION_GATHER_START_MS + ENDING_CELEBRATION_GATHER_DURATION_MS;
+const ENDING_TEXT_WAIT_AFTER_CELEBRATION_MS = 5_000;
+const ENDING_TEXT_FADE_MS = 3_000;
+const ENDING_TEXT_DELAY_MS =
+  ENDING_CELEBRATION_JUMP_START_MS + ENDING_TEXT_WAIT_AFTER_CELEBRATION_MS;
+const ENDING_RESTART_BUTTON_DELAY_MS = ENDING_TEXT_DELAY_MS + ENDING_TEXT_FADE_MS + 5_000;
 const SPECIAL_ITEM_THRESHOLDS: Record<SpecialItemKey, number> = {
   glasses: 2500,
   cap: 5000,
@@ -522,6 +536,8 @@ const QUIZ_QUESTIONS: QuizQuestion[] = [
 ];
 
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
+const easeOutCubic = (value: number) => 1 - Math.pow(1 - clamp(value, 0, 1), 3);
+const easeInCubic = (value: number) => Math.pow(clamp(value, 0, 1), 3);
 const pick = <T,>(items: T[]): T => items[Math.floor(Math.random() * items.length)];
 
 function hexToRgb(hex: string) {
@@ -573,6 +589,11 @@ function parseColorChannels(color: string) {
   }
   const rgb = hexToRgb(color);
   return { ...rgb, a: 1 };
+}
+
+function colorWithAlpha(color: string, alpha: number) {
+  const { r, g, b } = parseColorChannels(color);
+  return `rgba(${r}, ${g}, ${b}, ${clamp(alpha, 0, 1)})`;
 }
 
 let activeRunnerAuraRender:
@@ -770,6 +791,9 @@ function createInitialState(): GameState {
     pendingMatePowerBonusSpawnMs: null,
     quizCorrectStreak: 0,
     screenShakeMs: 0,
+    endingQueued: false,
+    endingMs: 0,
+    endingStartSpeed: 0,
   };
 }
 
@@ -1395,6 +1419,27 @@ function activateMatePower(state: GameState) {
   state.scorePopups.push(createScorePopup("MATE POWER", "#fde68a", W / 2, 70, "divine"));
 }
 
+function beginEnding(state: GameState) {
+  state.phase = "ending";
+  state.endingQueued = false;
+  state.endingMs = 0;
+  state.endingStartSpeed = Math.max(state.speed, START_SPEED);
+  state.player.ducking = false;
+  state.player.jumpHeld = false;
+  state.player.speedDrop = false;
+  state.player.invulnerableMs = 0;
+  state.player.hyperInvulnerableMs = 0;
+  state.player.matePowerMs = 0;
+  state.player.matePowerChainShiftMs = 0;
+  state.player.matePowerLockedOffset = 0;
+  state.pendingMatePowerBonusSpawnMs = null;
+  state.activeQuiz = null;
+  state.quizFeedback = null;
+  state.screenShakeMs = 0;
+  state.bestDistance = Math.max(state.bestDistance, state.distance);
+  state.bestTotal = Math.max(state.bestTotal, Math.floor(state.distance) + state.score);
+}
+
 function launchQuizConfetti(state: GameState, title: string) {
   const letterWidth = 7;
   const startX = W / 2 - (title.length * letterWidth) / 2;
@@ -1640,7 +1685,227 @@ function drawPierScene(ctx: CanvasRenderingContext2D, worldTime: number, lampGlo
   }
 }
 
-function drawBackground(ctx: CanvasRenderingContext2D, worldTime: number, dayNightTime: number) {
+function drawHumpbackWhale(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  variant: "large" | "small",
+  direction: "left" | "right" = "right"
+) {
+  const body = "#27384d";
+  const bodyLight = "#4a617a";
+  const belly = "#dfe8f0";
+  ctx.save();
+  if (direction === "left") {
+    const width = variant === "large" ? 23 : 15;
+    ctx.translate(x + width, 0);
+    ctx.scale(-1, 1);
+    x = 0;
+  }
+  if (variant === "large") {
+    drawRect(ctx, x + 2, y + 6, 18, 4, body);
+    drawRect(ctx, x + 6, y + 4, 13, 4, body);
+    drawRect(ctx, x + 9, y + 2, 8, 3, body);
+    drawRect(ctx, x + 4, y + 10, 10, 2, bodyLight);
+    drawRect(ctx, x + 14, y + 9, 6, 2, bodyLight);
+    drawRect(ctx, x + 8, y + 8, 7, 2, belly);
+    drawRect(ctx, x + 18, y + 6, 5, 2, body);
+    drawRect(ctx, x + 20, y + 5, 2, 1, bodyLight);
+    drawRect(ctx, x, y + 7, 4, 1, body);
+    drawRect(ctx, x + 1, y + 8, 3, 1, body);
+    drawRect(ctx, x + 10, y + 11, 3, 2, body);
+  } else {
+    drawRect(ctx, x + 1, y + 4, 12, 3, body);
+    drawRect(ctx, x + 4, y + 2, 8, 3, body);
+    drawRect(ctx, x + 6, y + 1, 4, 2, body);
+    drawRect(ctx, x + 4, y + 6, 6, 1, belly);
+    drawRect(ctx, x + 11, y + 4, 4, 2, body);
+    drawRect(ctx, x, y + 5, 3, 1, body);
+    drawRect(ctx, x + 6, y + 7, 2, 2, body);
+  }
+  ctx.restore();
+}
+
+function drawWhaleSpout(ctx: CanvasRenderingContext2D, x: number, y: number, pulse: number) {
+  const height = 10 + Math.round(pulse * 6);
+  const color = pulse > 0.55 ? "#f8fbff" : "#bfe8ff";
+  for (let index = 0; index < height; index += 1) {
+    const spread = Math.round((index / height) * 3);
+    drawRect(ctx, x - spread, y - index, 1, 1, color);
+    drawRect(ctx, x + spread, y - index, 1, 1, color);
+  }
+  drawRect(ctx, x - 1, y - height - 1, 3, 2, "#f8fbff");
+}
+
+function drawEndingFireworkBurst(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  progress: number,
+  colors: readonly string[]
+) {
+  const alpha = progress < 0.58 ? 1 : 1 - (progress - 0.58) / 0.42;
+  if (alpha <= 0) return;
+
+  const outerRadius = 5 + progress * 16;
+  const innerRadius = Math.max(2, outerRadius * 0.46);
+  const coreSize = progress < 0.18 ? 3 : 2;
+  const rayOffsets = [
+    [1, 0],
+    [0.72, 0.72],
+    [0, 1],
+    [-0.72, 0.72],
+    [-1, 0],
+    [-0.72, -0.72],
+    [0, -1],
+    [0.72, -0.72],
+  ] as const;
+
+  rayOffsets.forEach(([dx, dy], index) => {
+    const color = colors[index % colors.length];
+    const nearX = Math.round(x + dx * innerRadius);
+    const nearY = Math.round(y + dy * innerRadius);
+    const farX = Math.round(x + dx * outerRadius);
+    const farY = Math.round(y + dy * outerRadius);
+    drawRect(ctx, nearX, nearY, 2, 2, colorWithAlpha(color, alpha * 0.75));
+    drawRect(ctx, farX, farY, 2, 2, colorWithAlpha(color, alpha));
+    drawRect(
+      ctx,
+      Math.round(x + dx * (outerRadius + 4)),
+      Math.round(y + dy * (outerRadius + 4)),
+      1,
+      1,
+      colorWithAlpha(color, alpha * 0.82)
+    );
+  });
+
+  drawRect(ctx, x - 1, y - 1, coreSize, coreSize, colorWithAlpha("#fff8d8", alpha));
+
+  const reflectionWidth = 12 + progress * 10;
+  const reflectionAlpha = alpha * 0.2;
+  drawRect(ctx, Math.round(x - reflectionWidth / 2), 118, Math.round(reflectionWidth), 1, colorWithAlpha(colors[0], reflectionAlpha));
+  drawRect(ctx, Math.round(x - reflectionWidth / 3), 121, Math.round(reflectionWidth * 0.7), 1, colorWithAlpha("#f8fbff", reflectionAlpha * 0.9));
+  drawRect(ctx, Math.round(x - reflectionWidth / 4), 124, Math.round(reflectionWidth * 0.5), 1, colorWithAlpha(colors[colors.length - 1], reflectionAlpha * 0.6));
+}
+
+function drawEndingFireworks(ctx: CanvasRenderingContext2D, endingMs: number) {
+  if (endingMs < ENDING_CELEBRATION_JUMP_START_MS) return;
+
+  const fireworkTime = endingMs - ENDING_CELEBRATION_JUMP_START_MS;
+  const cycleMs = 4_200;
+  const burstWindowMs = 1_100;
+  const bursts = [
+    { offsetMs: 0, x: 78, y: 86, colors: ["#f8fbff", "#74acdf", "#facc15"] as const },
+    { offsetMs: 750, x: 184, y: 72, colors: ["#f8fbff", "#f472b6", "#fde68a"] as const },
+    { offsetMs: 1_500, x: 290, y: 90, colors: ["#f8fbff", "#38bdf8", "#facc15"] as const },
+    { offsetMs: 2_250, x: 126, y: 101, colors: ["#fff8d8", "#fb7185", "#f97316"] as const },
+    { offsetMs: 3_000, x: 236, y: 82, colors: ["#f8fbff", "#93c5fd", "#fde68a"] as const },
+  ] as const;
+
+  bursts.forEach((burst) => {
+    const localMs = ((fireworkTime - burst.offsetMs) % cycleMs + cycleMs) % cycleMs;
+    if (localMs > burstWindowMs) return;
+    drawEndingFireworkBurst(ctx, burst.x, burst.y, localMs / burstWindowMs, burst.colors);
+  });
+}
+
+function drawEndingWaterAndShips(
+  ctx: CanvasRenderingContext2D,
+  palette: Pick<ReturnType<typeof getDayNightScene>, "bayTop" | "bayLow">,
+  endingMs: number
+) {
+  drawRect(ctx, 0, 114, W, 12, palette.bayTop);
+  drawRect(ctx, 0, 126, W, 4, palette.bayLow);
+  drawRect(ctx, 0, 124, W, 1, "rgba(255,255,255,0.18)");
+
+  const departProgress = easeInCubic((endingMs - 1800) / 9000);
+  const mediumX = 182 + departProgress * 240;
+  const smallShipX = 264 + departProgress * 156;
+  const mediumBob = Math.sin(endingMs * 0.0017) * 1.2;
+  const smallBob = Math.sin(endingMs * 0.0019 + 1.2) * 0.8;
+  drawGenericCruiseShip(ctx, mediumX, 92 + mediumBob, "medium");
+  drawGenericCruiseShip(ctx, smallShipX, 103 + smallBob, "small");
+  if (departProgress < 0.12) {
+    drawMooringLine(ctx, 238, 125, 257, 138);
+    drawMooringLine(ctx, 256, 126, 278, 138);
+  }
+  const wakeAlpha = 0.12 + departProgress * 0.18;
+  drawRect(ctx, mediumX - 20, 122, 16, 1, `rgba(255,255,255,${wakeAlpha})`);
+  drawRect(ctx, mediumX - 28, 123, 10, 1, `rgba(255,255,255,${wakeAlpha * 0.8})`);
+  drawRect(ctx, smallShipX - 14, 126, 9, 1, `rgba(255,255,255,${wakeAlpha * 0.9})`);
+
+  const whaleReveal = clamp((endingMs - 2200) / 900, 0, 1);
+  const largeDurationMs = 5200;
+  const smallDurationMs = 4300;
+  const largeT = ((endingMs - 2600) % largeDurationMs + largeDurationMs) % largeDurationMs / largeDurationMs;
+  const smallT = ((endingMs - 3400) % smallDurationMs + smallDurationMs) % smallDurationMs / smallDurationMs;
+  const largeArc = 1 - Math.pow(largeT * 2 - 1, 2);
+  const smallArc = 1 - Math.pow(smallT * 2 - 1, 2);
+  const largeX = 326 - largeT * 274;
+  const smallX = 30 + smallT * 272;
+  const largeY = 126 - largeArc * 10;
+  const smallY = 128 - smallArc * 8;
+  const largeSpoutPulse = clamp(1 - Math.abs(largeT - 0.5) / 0.11, 0, 1);
+  const smallSpoutPulse = clamp(1 - Math.abs(smallT - 0.5) / 0.11, 0, 1);
+  if (whaleReveal > 0) {
+    drawHumpbackWhale(ctx, largeX, largeY, "large", "left");
+    if (largeSpoutPulse > 0) drawWhaleSpout(ctx, largeX + 12, largeY + 3, largeSpoutPulse);
+  }
+  if (whaleReveal > 0.28) {
+    drawHumpbackWhale(ctx, smallX, smallY, "small", "right");
+    if (smallSpoutPulse > 0) drawWhaleSpout(ctx, smallX + 9, smallY + 2, smallSpoutPulse);
+  }
+}
+
+function drawEndingPierScene(
+  ctx: CanvasRenderingContext2D,
+  worldTime: number,
+  lampGlow: number,
+  palette: Pick<ReturnType<typeof getDayNightScene>, "bayTop" | "bayLow">,
+  endingMs: number
+) {
+  const pierArrivalProgress = easeOutCubic(clamp((endingMs - 300) / 2400, 0, 1));
+  const pierEndX = Math.round(W + 20 - (W + 20 - 314) * pierArrivalProgress);
+  drawRect(ctx, 0, 130, pierEndX, 50, COLORS.pier);
+  drawRect(ctx, 0, 136, pierEndX, 3, COLORS.pierShade);
+  drawRect(ctx, 0, 144, pierEndX, 36, COLORS.pierDark);
+  drawRect(ctx, pierEndX, 130, W - pierEndX, 14, palette.bayTop);
+  drawRect(ctx, pierEndX, 144, W - pierEndX, 36, palette.bayLow);
+  drawRect(ctx, pierEndX, 142, W - pierEndX, 1, "rgba(255,255,255,0.15)");
+  drawRect(ctx, pierEndX, 146, W - pierEndX, 1, "rgba(0,0,0,0.12)");
+  const streetOffset = (worldTime * 0.15) % 110;
+  const stripeOffset = (worldTime * 0.15) % 28;
+  for (let i = -2; i < 14; i += 1) {
+    const x = i * 24 - stripeOffset;
+    if (x > pierEndX - 18) continue;
+    drawRect(ctx, x, 132, 12, 2, COLORS.roadStripe);
+    drawRect(ctx, x + 3, 135, 11, 2, COLORS.roadStripeDark);
+  }
+  for (let i = -1; i < 4; i += 1) {
+    const mastX = i * 110 + 76 - streetOffset;
+    if (mastX > pierEndX - 26) continue;
+    drawMast(ctx, mastX, 102);
+    if (lampGlow > 0.02) {
+      const glowX = mastX - 7;
+      drawRect(ctx, glowX, 94, 17, 10, `rgba(248, 210, 59, ${lampGlow})`);
+      drawRect(ctx, glowX + 6, 96, 3, 4, COLORS.mastLight);
+    }
+  }
+  for (let i = 0; i < 6; i += 1) {
+    const x = i * 52 + 12 - (worldTime * 0.025) % 52;
+    if (x > pierEndX - 14) continue;
+    drawRect(ctx, x, 140, 4, 4, COLORS.safetyYellow);
+    drawRect(ctx, x + 1, 137, 2, 3, COLORS.bollard);
+  }
+  drawRect(ctx, pierEndX - 6, 126, 6, 18, COLORS.ink);
+  drawRect(ctx, pierEndX, 128, 12, 16, COLORS.pierShade);
+  drawRect(ctx, pierEndX + 2, 130, 8, 12, COLORS.pier);
+  drawRect(ctx, pierEndX - 8, 132, 2, 8, COLORS.safetyYellow);
+  drawRect(ctx, pierEndX - 4, 132, 2, 8, COLORS.ink);
+  drawRect(ctx, pierEndX + 4, 132, 2, 8, COLORS.safetyYellow);
+}
+
+function drawBackground(ctx: CanvasRenderingContext2D, worldTime: number, dayNightTime: number, endingMs: number | null = null) {
   const scene = getDayNightScene(dayNightTime);
   drawRect(ctx, 0, 0, W, 34, scene.skyTop);
   drawRect(ctx, 0, 34, W, 34, scene.skyMid);
@@ -1656,8 +1921,14 @@ function drawBackground(ctx: CanvasRenderingContext2D, worldTime: number, dayNig
     drawRect(ctx, 0, 60, W, 44, `rgba(255, 148, 94, ${scene.twilightGlow})`);
   }
   drawUshuaiaMountainProfiles(ctx, scene);
-  drawHorizonWaterAndShips(ctx, scene);
-  drawPierScene(ctx, worldTime, scene.lampGlow);
+  if (endingMs !== null) {
+    drawEndingWaterAndShips(ctx, scene, endingMs);
+    drawEndingFireworks(ctx, endingMs);
+    drawEndingPierScene(ctx, worldTime, scene.lampGlow, scene, endingMs);
+  } else {
+    drawHorizonWaterAndShips(ctx, scene);
+    drawPierScene(ctx, worldTime, scene.lampGlow);
+  }
   if (scene.sceneShade > 0.01) {
     drawRect(ctx, 0, 0, W, H, `rgba(4, 10, 28, ${scene.sceneShade})`);
   }
@@ -2639,6 +2910,68 @@ function drawRunner(
   ctx.globalAlpha = previousAlpha;
 }
 
+function createEndingCelebrationPlayer(x: number, rise: number): PlayerState {
+  return {
+    x,
+    rise,
+    vy: 0,
+    ducking: false,
+    dead: false,
+    jumpHeld: false,
+    reachedMinRise: true,
+    speedDrop: false,
+    invulnerableMs: 0,
+    hyperInvulnerableMs: 0,
+    matePowerMs: 0,
+    matePowerChainShiftMs: 0,
+    matePowerLockedOffset: 0,
+  };
+}
+
+function drawEndingCelebrationCrowd(
+  ctx: CanvasRenderingContext2D,
+  endingMs: number,
+  selectedCharacterId: string,
+  selectedCharacterX: number
+) {
+  const gatherProgress = clamp((endingMs - ENDING_CELEBRATION_GATHER_START_MS) / ENDING_CELEBRATION_GATHER_DURATION_MS, 0, 1);
+  if (gatherProgress <= 0) return;
+
+  const slots = [
+    { x: 196, yOffset: -7, alpha: 0.82, jumpOffset: 0.2 },
+    { x: 214, yOffset: -7, alpha: 0.82, jumpOffset: 0.8 },
+    { x: 232, yOffset: -7, alpha: 0.82, jumpOffset: 1.4 },
+    { x: 250, yOffset: -7, alpha: 0.82, jumpOffset: 2.0 },
+    { x: 268, yOffset: -7, alpha: 0.82, jumpOffset: 2.6 },
+    { x: 286, yOffset: -7, alpha: 0.82, jumpOffset: 3.2 },
+    { x: 186, yOffset: 0, alpha: 1, jumpOffset: 0.5 },
+    { x: 204, yOffset: 0, alpha: 1, jumpOffset: 1.1 },
+    { x: 222, yOffset: 0, alpha: 1, jumpOffset: 1.7 },
+    { x: 240, yOffset: 0, alpha: 1, jumpOffset: 2.3 },
+    { x: 258, yOffset: 0, alpha: 1, jumpOffset: 2.9 },
+    { x: 276, yOffset: 0, alpha: 1, jumpOffset: 3.5 },
+  ] as const;
+
+  const otherCharacters = CHARACTERS.map((character) => character.id).filter((characterId) => characterId !== selectedCharacterId);
+  const celebrationCharacters = [...otherCharacters.slice(0, 9), selectedCharacterId, ...otherCharacters.slice(9)];
+  const jumpClockMs = Math.max(0, endingMs - ENDING_CELEBRATION_JUMP_START_MS);
+
+  celebrationCharacters.forEach((characterId, index) => {
+    const slot = slots[index];
+    if (!slot) return;
+    const startX = characterId === selectedCharacterId ? selectedCharacterX : -52 - index * 14;
+    const x = Math.round(startX + (slot.x - startX) * easeOutCubic(gatherProgress));
+    const jumpWave = Math.max(0, Math.sin(jumpClockMs * 0.012 + slot.jumpOffset));
+    const rise = endingMs >= ENDING_CELEBRATION_JUMP_START_MS ? Math.round(jumpWave * (slot.yOffset === 0 ? 12 : 9)) : 0;
+    const crowdPlayer = createEndingCelebrationPlayer(x, rise);
+    ctx.save();
+    ctx.globalAlpha = slot.alpha;
+    if (slot.yOffset !== 0) ctx.translate(0, slot.yOffset);
+    drawRunnerCore(ctx, crowdPlayer, jumpClockMs + index * 80, characterId);
+    ctx.restore();
+  });
+}
+
 function RunnerPreview({ characterId, active }: { characterId: string; active: boolean }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
@@ -2915,9 +3248,115 @@ function drawQuizOverlay(ctx: CanvasRenderingContext2D, state: GameState) {
   drawRect(ctx, 0, 0, W, H, "rgba(2, 6, 23, 0.72)");
 }
 
-function drawOverlay(ctx: CanvasRenderingContext2D, state: GameState) {
+function drawEndingSummaryOverlay(
+  ctx: CanvasRenderingContext2D,
+  state: GameState,
+  nickname: string,
+  leaderboardRows: LeaderboardRow[],
+  leaderboardLoading: boolean
+) {
+  if (state.endingMs < ENDING_TEXT_DELAY_MS) return;
+
+  const textVisibleMs = state.endingMs - ENDING_TEXT_DELAY_MS;
+  const fadeProgress = clamp(textVisibleMs / ENDING_TEXT_FADE_MS, 0, 1);
+  const winnerName = nickname.trim() || "runner";
+  const winnerLabel = winnerName.length > 12 ? `${winnerName.slice(0, 12)}...` : winnerName;
+  const currentTotal = Math.floor(state.distance) + state.score;
+  const topFive = leaderboardRows.slice(0, 5);
+  const previousAlpha = ctx.globalAlpha;
+
+  ctx.globalAlpha = previousAlpha * fadeProgress;
+
+  drawRect(ctx, 18, 30, 324, 86, "rgba(7, 12, 24, 0.72)");
+  drawRect(ctx, 22, 34, 316, 78, "rgba(255,255,255,0.08)");
+  drawRect(ctx, 30, 42, 152, 54, "rgba(8, 18, 30, 0.68)");
+  drawRect(ctx, 194, 42, 132, 54, "rgba(8, 18, 30, 0.68)");
+
+  ctx.fillStyle = "#f8fbff";
+  ctx.textAlign = "center";
+  ctx.font = "bold 10px monospace";
+  ctx.fillText(`Ganaste ${winnerLabel}!`, 106, 54);
+  ctx.font = "7px monospace";
+  ctx.fillText("Completaste la temporada", 106, 69);
+  ctx.fillText("superando todos los obstaculos.", 106, 79);
+  ctx.fillText("Gracias!", 106, 90);
+
+  ctx.textAlign = "left";
+  ctx.fillStyle = "#fff8d8";
+  ctx.font = "bold 7px monospace";
+  ctx.fillText("TOP 5", 202, 53);
+  ctx.fillStyle = "#f8fbff";
+  ctx.font = "6px monospace";
+  if (leaderboardLoading && topFive.length === 0) {
+    ctx.fillText("Cargando...", 202, 67);
+  } else if (topFive.length === 0) {
+    ctx.fillText("Sin corridas", 202, 67);
+  } else {
+    topFive.forEach((entry, index) => {
+      const rowY = 64 + index * 8;
+      const rowName = entry.nickname.length > 9 ? `${entry.nickname.slice(0, 9)}.` : entry.nickname;
+      ctx.fillText(`${index + 1}. ${rowName}`, 202, rowY);
+      ctx.textAlign = "right";
+      ctx.fillText(String(entry.total_points), 318, rowY);
+      ctx.textAlign = "left";
+    });
+  }
+
+  ctx.textAlign = "center";
+  ctx.fillStyle = "#fde68a";
+  ctx.font = "bold 8px monospace";
+  ctx.fillText(`PUNTAJE TOTAL ${currentTotal}`, W / 2, 106);
+
+  ctx.globalAlpha = previousAlpha;
+
+  if (state.endingMs >= ENDING_RESTART_BUTTON_DELAY_MS) {
+    drawRect(ctx, 106, 136, 148, 20, "rgba(8, 18, 30, 0.92)");
+    drawRect(ctx, 108, 138, 144, 16, "#f8fbff");
+    drawRect(ctx, 110, 140, 140, 12, "#1d3557");
+    ctx.fillStyle = "#fff8d8";
+    ctx.font = "bold 7px monospace";
+    ctx.fillText("EMPEZAR DE NUEVO", W / 2, 149);
+  }
+
+  ctx.textAlign = "left";
+}
+
+function drawOverlay(
+  ctx: CanvasRenderingContext2D,
+  state: GameState,
+  nickname = "",
+  leaderboardRows: LeaderboardRow[] = [],
+  leaderboardLoading = false
+) {
   if (state.phase === "quiz") {
     drawQuizOverlay(ctx, state);
+    return;
+  }
+
+  if (state.phase === "ending") {
+    drawEndingSummaryOverlay(ctx, state, nickname, leaderboardRows, leaderboardLoading);
+    return;
+    if (state.endingMs < ENDING_TEXT_DELAY_MS) return;
+    const textVisibleMs = state.endingMs - ENDING_TEXT_DELAY_MS;
+    drawRect(ctx, 42, 36, 276, 62, "rgba(7, 12, 24, 0.66)");
+    drawRect(ctx, 46, 40, 268, 54, "rgba(255,255,255,0.08)");
+    ctx.fillStyle = "#f8fbff";
+    ctx.textAlign = "center";
+    ctx.font = "bold 12px monospace";
+    ctx.fillText("¡Ganaste!", W / 2, 53);
+    ctx.font = "7px monospace";
+    ctx.fillText("Completaste la temporada", W / 2, 70);
+    ctx.fillText("superando todos los obstáculos.", W / 2, 80);
+    ctx.fillText("Gracias!", W / 2, 91);
+    if (textVisibleMs >= ENDING_RESTART_BUTTON_DELAY_MS - ENDING_TEXT_DELAY_MS) {
+      drawRect(ctx, 106, 136, 148, 20, "rgba(8, 18, 30, 0.92)");
+      drawRect(ctx, 108, 138, 144, 16, "#f8fbff");
+      drawRect(ctx, 110, 140, 140, 12, "#1d3557");
+      ctx.fillStyle = "#fff8d8";
+      ctx.font = "bold 7px monospace";
+      ctx.fillText("EMPEZAR DE NUEVO", W / 2, 149);
+    }
+    ctx.textAlign = "left";
     return;
   }
 
@@ -2933,6 +3372,13 @@ function drawOverlay(ctx: CanvasRenderingContext2D, state: GameState) {
     ctx.fillText("Corre por el muelle y suma puntos para ganar", W / 2, 65);
   }
   ctx.textAlign = "left";
+}
+
+function drawEndingLetterbox(ctx: CanvasRenderingContext2D, endingMs: number) {
+  const barHeight = Math.round(24 * easeOutCubic(endingMs / 900));
+  if (barHeight <= 0) return;
+  drawRect(ctx, 0, 0, W, barHeight, "rgba(3, 6, 12, 0.96)");
+  drawRect(ctx, 0, H - barHeight, W, barHeight, "rgba(3, 6, 12, 0.96)");
 }
 
 function invariant(condition: unknown, message: string) {
@@ -2969,6 +3415,8 @@ export default function UshuaiaRunnerFlorPrototype() {
   const stateRef = useRef<GameState>(createInitialState());
   const selectedCharacterRef = useRef("flor");
   const nicknameRef = useRef("");
+  const leaderboardRef = useRef<LeaderboardRow[]>([]);
+  const leaderboardLoadingRef = useRef(true);
   const submittedScoreRef = useRef<string | null>(null);
 
   const [phase, setPhase] = useState<Phase>("ready");
@@ -2997,6 +3445,14 @@ export default function UshuaiaRunnerFlorPrototype() {
   useEffect(() => {
     nicknameRef.current = nickname;
   }, [nickname]);
+
+  useEffect(() => {
+    leaderboardRef.current = leaderboard;
+  }, [leaderboard]);
+
+  useEffect(() => {
+    leaderboardLoadingRef.current = leaderboardLoading;
+  }, [leaderboardLoading]);
 
   useEffect(() => {
     const storedNickname = window.localStorage.getItem(NICKNAME_STORAGE_KEY) ?? "";
@@ -3030,6 +3486,33 @@ export default function UshuaiaRunnerFlorPrototype() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (phase !== "ending") return;
+    let cancelled = false;
+
+    const refreshEndingLeaderboard = async () => {
+      setLeaderboardLoading(true);
+      try {
+        const rows = await fetchTopLeaderboard(5);
+        if (!cancelled) {
+          setLeaderboard(rows);
+          setLeaderboardError("");
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setLeaderboardError(`No pudimos cargar el Top 5. ${getErrorMessage(error)}`);
+        }
+      } finally {
+        if (!cancelled) setLeaderboardLoading(false);
+      }
+    };
+
+    void refreshEndingLeaderboard();
+    return () => {
+      cancelled = true;
+    };
+  }, [phase]);
 
   const syncCanvasResolution = () => {
     const canvas = canvasRef.current;
@@ -3134,7 +3617,7 @@ export default function UshuaiaRunnerFlorPrototype() {
       resetGame(true);
       state = stateRef.current;
     }
-  if (state.phase === "gameover" || state.phase === "quiz") return;
+  if (state.phase === "gameover" || state.phase === "quiz" || state.phase === "ending" || state.endingQueued) return;
   const player = state.player;
   if (state.specialUnlocks.cape && player.rise > 0.01 && player.vy > 0 && !player.speedDrop) {
     player.jumpHeld = true;
@@ -3159,7 +3642,7 @@ export default function UshuaiaRunnerFlorPrototype() {
 
   const setDuck = (value: boolean) => {
     const state = stateRef.current;
-    if (state.phase === "gameover" || state.phase === "quiz") {
+    if (state.phase === "gameover" || state.phase === "quiz" || state.phase === "ending" || state.endingQueued) {
       keysRef.current.duckHeld = false;
       state.player.ducking = false;
       return;
@@ -3235,7 +3718,7 @@ export default function UshuaiaRunnerFlorPrototype() {
         event.preventDefault();
       }
 
-      if (stateRef.current.phase === "gameover") {
+      if (stateRef.current.phase === "gameover" || stateRef.current.phase === "ending") {
         if (!event.repeat && event.code === "Enter") resetGame(true);
         return;
       }
@@ -3293,6 +3776,12 @@ export default function UshuaiaRunnerFlorPrototype() {
       state.scorePopups = updateScorePopups(state.scorePopups, dtMs, dt);
       state.quizFeedback = updateQuizFeedback(state.quizFeedback, dtMs);
       state.screenShakeMs = Math.max(0, state.screenShakeMs - dtMs);
+      if (state.phase === "running" && !state.endingQueued && state.distance >= ENDING_TRIGGER_DISTANCE) {
+        state.endingQueued = true;
+        keysRef.current.duckHeld = false;
+        state.player.jumpHeld = false;
+        state.player.speedDrop = false;
+      }
 
       if (state.phase === "running") {
         state.worldTime += dtMs;
@@ -3460,6 +3949,14 @@ export default function UshuaiaRunnerFlorPrototype() {
         }
 
         player.ducking = keysRef.current.duckHeld && player.rise === 0;
+        if (state.endingQueued) {
+          const endingReady = player.rise <= 0.01 && Math.abs(player.vy) < 0.02 && !player.ducking;
+          if (endingReady) {
+            beginEnding(state);
+            setQuizUi(null);
+            setPhase("ending");
+          }
+        }
 
         const hasQuizStarOnScreen = state.obstacles.some((obstacle) => obstacle.type === "quizStar");
         const hasMatePowerOnScreen = state.obstacles.some((obstacle) => obstacle.type === "matePower");
@@ -3487,7 +3984,7 @@ export default function UshuaiaRunnerFlorPrototype() {
           state.nextPoisonDistance !== null &&
           state.distance >= state.nextPoisonDistance;
 
-        if (canSpawnMatePower || canSpawnBonusMatePower) {
+        if (!state.endingQueued && (canSpawnMatePower || canSpawnBonusMatePower)) {
           state.obstacles.push(createMatePower());
           if (canSpawnMatePower) {
             state.nextMatePowerDistance = getNextMatePowerDistance(state.distance);
@@ -3497,17 +3994,17 @@ export default function UshuaiaRunnerFlorPrototype() {
           }
         }
 
-        if (canSpawnPoison) {
+        if (!state.endingQueued && canSpawnPoison) {
           state.obstacles.push(createPoison());
           if (canSpawnPoison) {
             state.nextPoisonDistance = state.distance + getNextPoisonDistance(0);
           }
         }
 
-        if (canSpawnQuizStar) {
+        if (!state.endingQueued && canSpawnQuizStar) {
           state.obstacles.push(createQuizStar());
           state.nextStarDistance = getNextStarDistance(state.distance);
-        } else if (!hasQuizStarOnScreen && state.distance >= state.nextObstacleDistance) {
+        } else if (!state.endingQueued && !hasQuizStarOnScreen && state.distance >= state.nextObstacleDistance) {
           const obstacle = createObstacle(state.distance, state.specialUnlocks.cape || player.matePowerMs > 0);
           state.obstacles.push(obstacle);
           state.nextObstacleDistance = state.distance + getNextObstacleGap(obstacle, state.speed);
@@ -3535,51 +4032,53 @@ export default function UshuaiaRunnerFlorPrototype() {
         }
         state.particles = state.particles.filter((particle) => particle.life > 0);
 
-        const collectedStarIndex = state.obstacles.findIndex(
-          (obstacle) => obstacle.type === "quizStar" && collides(player, obstacle, state.worldTime)
-        );
-        if (collectedStarIndex >= 0) {
-          const collectedStar = state.obstacles[collectedStarIndex]!;
-          state.obstacles.splice(collectedStarIndex, 1);
-          if (player.hyperInvulnerableMs > 0 || player.matePowerMs > 0) {
-            state.score += POWERED_STAR_SCORE;
-            state.scorePopups.push(
-              createScorePopup(
-                `+${POWERED_STAR_SCORE}`,
-                "#fde047",
-                getAnimatedObstacleX(collectedStar, state.worldTime) + collectedStar.w / 2,
-                getAnimatedObstacleY(collectedStar, state.worldTime) - 6,
-                "divine"
-              )
-            );
-          } else {
-            triggerQuiz();
-          }
-        }
-
-        const collectedMatePowerIndex = state.obstacles.findIndex(
-          (obstacle) => obstacle.type === "matePower" && collides(player, obstacle, state.worldTime)
-        );
-        if (collectedMatePowerIndex >= 0) {
-          state.obstacles.splice(collectedMatePowerIndex, 1);
-          activateMatePower(state);
-        }
-
         const obstacleBreakingInvulnerable = player.hyperInvulnerableMs > 0 || player.matePowerMs > 0;
-        const playerProtected = player.invulnerableMs > 0 || obstacleBreakingInvulnerable;
-        const poisonHitIndex = state.obstacles.findIndex(
-          (obstacle) => obstacle.type === "poison" && collides(player, obstacle, state.worldTime)
-        );
-        if (poisonHitIndex >= 0 && !obstacleBreakingInvulnerable && (player.matePowerMs > 0 || getTopSpecialHealth(state.specialUnlocks))) {
-          state.obstacles.splice(poisonHitIndex, 1);
-          stripAllSpecialItems(state);
-          player.matePowerMs = 0;
-          player.matePowerChainShiftMs = 0;
-          player.matePowerLockedOffset = 0;
-          player.invulnerableMs = Math.max(player.invulnerableMs, POISON_INVULNERABILITY_MS);
-          state.pendingMatePowerBonusSpawnMs = null;
-          state.quizFeedback = createPoisonFeedback();
-          state.screenShakeMs = Math.max(state.screenShakeMs, POISON_SHAKE_MS);
+        const playerProtected = state.endingQueued || player.invulnerableMs > 0 || obstacleBreakingInvulnerable;
+        if (!state.endingQueued) {
+          const collectedStarIndex = state.obstacles.findIndex(
+            (obstacle) => obstacle.type === "quizStar" && collides(player, obstacle, state.worldTime)
+          );
+          if (collectedStarIndex >= 0) {
+            const collectedStar = state.obstacles[collectedStarIndex]!;
+            state.obstacles.splice(collectedStarIndex, 1);
+            if (player.hyperInvulnerableMs > 0 || player.matePowerMs > 0) {
+              state.score += POWERED_STAR_SCORE;
+              state.scorePopups.push(
+                createScorePopup(
+                  `+${POWERED_STAR_SCORE}`,
+                  "#fde047",
+                  getAnimatedObstacleX(collectedStar, state.worldTime) + collectedStar.w / 2,
+                  getAnimatedObstacleY(collectedStar, state.worldTime) - 6,
+                  "divine"
+                )
+              );
+            } else {
+              triggerQuiz();
+            }
+          }
+
+          const collectedMatePowerIndex = state.obstacles.findIndex(
+            (obstacle) => obstacle.type === "matePower" && collides(player, obstacle, state.worldTime)
+          );
+          if (collectedMatePowerIndex >= 0) {
+            state.obstacles.splice(collectedMatePowerIndex, 1);
+            activateMatePower(state);
+          }
+
+          const poisonHitIndex = state.obstacles.findIndex(
+            (obstacle) => obstacle.type === "poison" && collides(player, obstacle, state.worldTime)
+          );
+          if (poisonHitIndex >= 0 && !obstacleBreakingInvulnerable && (player.matePowerMs > 0 || getTopSpecialHealth(state.specialUnlocks))) {
+            state.obstacles.splice(poisonHitIndex, 1);
+            stripAllSpecialItems(state);
+            player.matePowerMs = 0;
+            player.matePowerChainShiftMs = 0;
+            player.matePowerLockedOffset = 0;
+            player.invulnerableMs = Math.max(player.invulnerableMs, POISON_INVULNERABILITY_MS);
+            state.pendingMatePowerBonusSpawnMs = null;
+            state.quizFeedback = createPoisonFeedback();
+            state.screenShakeMs = Math.max(state.screenShakeMs, POISON_SHAKE_MS);
+          }
         }
 
         const damagingObstacleIndex = state.obstacles.findIndex(
@@ -3588,7 +4087,7 @@ export default function UshuaiaRunnerFlorPrototype() {
             obstacle.type !== "matePower" &&
             collides(player, obstacle, state.worldTime)
         );
-        if (state.phase === "running" && damagingObstacleIndex >= 0) {
+        if (state.phase === "running" && !state.endingQueued && damagingObstacleIndex >= 0) {
           const damagingObstacle = state.obstacles[damagingObstacleIndex]!;
           if (obstacleBreakingInvulnerable) {
             state.obstacles.splice(damagingObstacleIndex, 1);
@@ -3629,6 +4128,47 @@ export default function UshuaiaRunnerFlorPrototype() {
         }
 
         setDistance(Math.floor(state.distance));
+      } else if (state.phase === "ending") {
+        const player = state.player;
+        state.endingMs += dtMs;
+        state.worldTime += dtMs * 0.32;
+        const decelerationRatio = clamp(state.endingMs / ENDING_DECELERATION_MS, 0, 1);
+        state.speed = state.endingStartSpeed * (1 - decelerationRatio);
+        state.baseSpeed = state.speed;
+        state.sceneMotionTime += dtMs * (state.speed / START_SPEED);
+        state.distance += state.speed * (dtMs / FRAME_MS);
+        state.bestDistance = Math.max(state.bestDistance, state.distance);
+        state.bestTotal = Math.max(state.bestTotal, Math.floor(state.distance) + state.score);
+
+        player.invulnerableMs = 0;
+        player.hyperInvulnerableMs = 0;
+        player.matePowerMs = 0;
+        player.matePowerChainShiftMs = 0;
+        player.matePowerLockedOffset = 0;
+        player.rise = 0;
+        player.vy = 0;
+        player.ducking = false;
+        player.jumpHeld = false;
+        player.reachedMinRise = false;
+        player.speedDrop = false;
+
+        const arrivalProgress = easeOutCubic(state.endingMs / (ENDING_DECELERATION_MS + 1200));
+        player.x = PLAYER_BASE_X + (ENDING_PLAYER_TARGET_X - PLAYER_BASE_X) * arrivalProgress;
+
+        const obstacleDriftSpeed = Math.max(1.2, state.endingStartSpeed * (1 - decelerationRatio * 0.55));
+        for (const obstacle of state.obstacles) {
+          obstacle.x -= obstacleDriftSpeed * (dtMs / FRAME_MS);
+        }
+        state.obstacles = state.obstacles.filter((obstacle) => obstacle.x + obstacle.w > -40);
+
+        for (const particle of state.particles) {
+          particle.x += particle.vx * dt;
+          particle.y += particle.vy * dt;
+          particle.vy += (particle.gravity ?? 0) * dt;
+          particle.life -= dtMs;
+        }
+        state.particles = state.particles.filter((particle) => particle.life > 0);
+        setDistance(Math.floor(state.distance));
       } else if (state.phase === "quiz") {
         if (state.activeQuiz) {
           state.activeQuiz.remainingMs -= dtMs;
@@ -3666,14 +4206,24 @@ export default function UshuaiaRunnerFlorPrototype() {
         ctx.translate(shakeX, shakeY);
       }
       ctx.save();
-      drawBackground(ctx, state.sceneMotionTime, state.dayNightTime);
+      const endingActive = state.phase === "ending";
+      const runnerWorldTime = endingActive && state.speed < 0.28 ? 0 : state.worldTime;
+      const endingCelebrationActive = endingActive && state.endingMs >= ENDING_CELEBRATION_GATHER_START_MS;
+      drawBackground(ctx, state.sceneMotionTime, state.dayNightTime, endingActive ? state.endingMs : null);
       state.obstacles.forEach((obstacle) => drawObstacle(ctx, obstacle, state.worldTime));
       state.particles.forEach((particle) => drawParticle(ctx, particle));
-      drawRunner(ctx, state.player, state.worldTime, selectedCharacterRef.current, state.specialUnlocks);
+      if (endingCelebrationActive) {
+        drawEndingCelebrationCrowd(ctx, state.endingMs, selectedCharacterRef.current, state.player.x);
+      } else {
+        drawRunner(ctx, state.player, runnerWorldTime, selectedCharacterRef.current, state.specialUnlocks);
+      }
       drawScorePopups(ctx, state);
       ctx.restore();
-      drawHud(ctx, state);
-      if (state.phase !== "running") drawOverlay(ctx, state);
+      if (endingActive) drawEndingLetterbox(ctx, state.endingMs);
+      if (!endingActive) drawHud(ctx, state);
+      if (state.phase !== "running") {
+        drawOverlay(ctx, state, nicknameRef.current, leaderboardRef.current, leaderboardLoadingRef.current);
+      }
       drawQuizFeedback(ctx, state);
       ctx.restore();
       rafRef.current = requestAnimationFrame(tick);
