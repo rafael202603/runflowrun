@@ -5,6 +5,7 @@ dist/
 .env.*
 !.env.example
 !.env.github-pages
+.npm-cache/
 *.log
 vite.err
 vite.log

@@ -95,6 +95,15 @@ type SpecialItemKey = "glasses" | "cap" | "cape";
 
 type SpecialUnlocks = Record<SpecialItemKey, boolean>;
 
+type FinalizedRun = {
+  signature: string;
+  nickname: string;
+  characterId: string;
+  distance: number;
+  score: number;
+  victory: boolean;
+};
+
 let mateSpriteImage: HTMLImageElement | null = null;
 let poisonSpriteImage: HTMLImageElement | null = null;
 let skullSpriteImage: HTMLImageElement | null = null;
@@ -243,6 +252,7 @@ const ENDING_PLAYER_TARGET_X = 274;
 const ENDING_CELEBRATION_GATHER_START_MS = 3_600;
 const ENDING_CELEBRATION_GATHER_DURATION_MS = 1_400;
 const ENDING_CELEBRATION_JUMP_START_MS = ENDING_CELEBRATION_GATHER_START_MS + ENDING_CELEBRATION_GATHER_DURATION_MS;
+const ENDING_SAVE_TRIGGER_MS = ENDING_CELEBRATION_GATHER_START_MS + ENDING_CELEBRATION_GATHER_DURATION_MS;
 const ENDING_TEXT_WAIT_AFTER_CELEBRATION_MS = 5_000;
 const ENDING_TEXT_FADE_MS = 3_000;
 const ENDING_TEXT_DELAY_MS =
@@ -3309,15 +3319,6 @@ function drawEndingSummaryOverlay(
 
   ctx.globalAlpha = previousAlpha;
 
-  if (state.endingMs >= ENDING_RESTART_BUTTON_DELAY_MS) {
-    drawRect(ctx, 106, 136, 148, 20, "rgba(8, 18, 30, 0.92)");
-    drawRect(ctx, 108, 138, 144, 16, "#f8fbff");
-    drawRect(ctx, 110, 140, 140, 12, "#1d3557");
-    ctx.fillStyle = "#fff8d8";
-    ctx.font = "bold 7px monospace";
-    ctx.fillText("EMPEZAR DE NUEVO", W / 2, 149);
-  }
-
   ctx.textAlign = "left";
 }
 
@@ -3418,6 +3419,9 @@ export default function UshuaiaRunnerFlorPrototype() {
   const leaderboardRef = useRef<LeaderboardRow[]>([]);
   const leaderboardLoadingRef = useRef(true);
   const submittedScoreRef = useRef<string | null>(null);
+  const pendingLeaderboardSubmissionRef = useRef<FinalizedRun | null>(null);
+  const endingRestartReadyRef = useRef(false);
+  const endingSaveReadyRef = useRef(false);
 
   const [phase, setPhase] = useState<Phase>("ready");
   const [distance, setDistance] = useState(0);
@@ -3433,6 +3437,8 @@ export default function UshuaiaRunnerFlorPrototype() {
   const [leaderboardLoading, setLeaderboardLoading] = useState(true);
   const [leaderboardError, setLeaderboardError] = useState("");
   const [leaderboardStatus, setLeaderboardStatus] = useState("");
+  const [endingRestartReady, setEndingRestartReady] = useState(false);
+  const [endingSaveReady, setEndingSaveReady] = useState(false);
 
   useEffect(() => {
     document.title = "Run Flow Run";
@@ -3487,32 +3493,39 @@ export default function UshuaiaRunnerFlorPrototype() {
     };
   }, []);
 
-  useEffect(() => {
-    if (phase !== "ending") return;
-    let cancelled = false;
+  const setEndingRestartAvailability = (ready: boolean) => {
+    if (endingRestartReadyRef.current === ready) return;
+    endingRestartReadyRef.current = ready;
+    setEndingRestartReady(ready);
+  };
 
-    const refreshEndingLeaderboard = async () => {
-      setLeaderboardLoading(true);
-      try {
-        const rows = await fetchTopLeaderboard(5);
-        if (!cancelled) {
-          setLeaderboard(rows);
-          setLeaderboardError("");
-        }
-      } catch (error) {
-        if (!cancelled) {
-          setLeaderboardError(`No pudimos cargar el Top 5. ${getErrorMessage(error)}`);
-        }
-      } finally {
-        if (!cancelled) setLeaderboardLoading(false);
-      }
-    };
+  const setEndingSaveAvailability = (ready: boolean) => {
+    if (endingSaveReadyRef.current === ready) return;
+    endingSaveReadyRef.current = ready;
+    setEndingSaveReady(ready);
+  };
 
-    void refreshEndingLeaderboard();
-    return () => {
-      cancelled = true;
+  const buildFinishedRun = (outcome: "ending" | "gameover", distanceOverride?: number) => {
+    const currentNickname = nicknameRef.current.trim();
+    if (!currentNickname) {
+      return null;
+    }
+
+    const snapshotDistance = Math.max(0, Math.floor(distanceOverride ?? stateRef.current.distance));
+    const snapshotScore = Math.floor(stateRef.current.score);
+    return {
+      signature: `${outcome}:${currentNickname}:${selectedCharacterRef.current}:${snapshotDistance}:${snapshotScore}`,
+      nickname: currentNickname,
+      characterId: selectedCharacterRef.current,
+      distance: snapshotDistance,
+      score: snapshotScore,
+      victory: outcome === "ending",
     };
-  }, [phase]);
+  };
+
+  const captureFinishedRun = (outcome: "ending" | "gameover", distanceOverride?: number) => {
+    pendingLeaderboardSubmissionRef.current = buildFinishedRun(outcome, distanceOverride);
+  };
 
   const syncCanvasResolution = () => {
     const canvas = canvasRef.current;
@@ -3598,6 +3611,9 @@ export default function UshuaiaRunnerFlorPrototype() {
     const dayNightTime = stateRef.current.dayNightTime;
     stateRef.current = { ...createInitialState(), bestDistance, bestTotal, dayNightTime, phase: startRunning ? "running" : "ready" };
     submittedScoreRef.current = null;
+    pendingLeaderboardSubmissionRef.current = null;
+    setEndingRestartAvailability(false);
+    setEndingSaveAvailability(false);
     setBest(Math.floor(bestDistance));
     setBestTotal(bestTotal);
     setDistance(0);
@@ -3663,33 +3679,41 @@ export default function UshuaiaRunnerFlorPrototype() {
   };
 
   useEffect(() => {
-    if (phase !== "gameover") return;
-    const currentNickname = nicknameRef.current.trim();
-    if (!currentNickname) return;
+    if (phase !== "gameover" && phase !== "ending") return;
+    if (phase === "ending" && !endingSaveReady) return;
 
-    const state = stateRef.current;
-    const signature = `${currentNickname}:${selectedCharacterRef.current}:${Math.floor(state.distance)}:${state.score}`;
-    if (submittedScoreRef.current === signature) return;
-    submittedScoreRef.current = signature;
+    const finalizedRun =
+      phase === "ending"
+        ? buildFinishedRun("ending")
+        : pendingLeaderboardSubmissionRef.current ?? buildFinishedRun("gameover");
+    if (!finalizedRun) return;
+    pendingLeaderboardSubmissionRef.current = finalizedRun;
+    if (submittedScoreRef.current === finalizedRun.signature) return;
+    submittedScoreRef.current = finalizedRun.signature;
 
     let cancelled = false;
     const syncLeaderboard = async () => {
-      setLeaderboardStatus("Guardando en el ranking...");
+      setLeaderboardLoading(true);
+      setLeaderboardStatus(finalizedRun.victory ? "Guardando tu victoria en el ranking..." : "Guardando en el ranking...");
       setLeaderboardError("");
       try {
         const result = await submitBestLeaderboardScore({
-          nickname: currentNickname,
-          character_id: selectedCharacterRef.current,
-          score: state.score,
-          distance: Math.floor(state.distance),
+          nickname: finalizedRun.nickname,
+          character_id: finalizedRun.characterId,
+          score: finalizedRun.score,
+          distance: finalizedRun.distance,
         });
         const rows = await fetchTopLeaderboard();
         if (!cancelled) {
           setLeaderboard(rows);
           setLeaderboardStatus(
             result.status === "kept-existing"
-              ? "Tu mejor corrida anterior sigue arriba."
-              : "Ranking actualizado con tu mejor corrida."
+              ? finalizedRun.victory
+                ? "Tu mejor victoria anterior sigue arriba."
+                : "Tu mejor corrida anterior sigue arriba."
+              : finalizedRun.victory
+                ? "Victoria guardada y ranking actualizado."
+                : "Ranking actualizado con tu mejor corrida."
           );
         }
       } catch (error) {
@@ -3698,6 +3722,8 @@ export default function UshuaiaRunnerFlorPrototype() {
           setLeaderboardError(`No pudimos guardar esta corrida en Supabase. ${detail}`);
           setLeaderboardStatus("");
         }
+      } finally {
+        if (!cancelled) setLeaderboardLoading(false);
       }
     };
 
@@ -3705,7 +3731,7 @@ export default function UshuaiaRunnerFlorPrototype() {
     return () => {
       cancelled = true;
     };
-  }, [phase]);
+  }, [phase, endingSaveReady]);
 
   useEffect(() => {
     runSelfChecks();
@@ -3718,8 +3744,13 @@ export default function UshuaiaRunnerFlorPrototype() {
         event.preventDefault();
       }
 
-      if (stateRef.current.phase === "gameover" || stateRef.current.phase === "ending") {
+      if (stateRef.current.phase === "gameover") {
         if (!event.repeat && event.code === "Enter") resetGame(true);
+        return;
+      }
+
+      if (stateRef.current.phase === "ending") {
+        if (!event.repeat && event.code === "Enter" && endingRestartReadyRef.current) resetGame(true);
         return;
       }
 
@@ -3767,6 +3798,12 @@ export default function UshuaiaRunnerFlorPrototype() {
       if (!canvas) {
         rafRef.current = requestAnimationFrame(tick);
         return;
+      }
+      if (state.phase !== "ending" && endingRestartReadyRef.current) {
+        setEndingRestartAvailability(false);
+      }
+      if (state.phase !== "ending" && endingSaveReadyRef.current) {
+        setEndingSaveAvailability(false);
       }
 
       const dtMs = Math.min(32, now - last || 16.67);
@@ -4114,6 +4151,7 @@ export default function UshuaiaRunnerFlorPrototype() {
                 player.dead = false;
                 player.jumpHeld = false;
             } else {
+              captureFinishedRun("gameover");
               state.phase = "gameover";
               player.dead = true;
               player.jumpHeld = false;
@@ -4139,6 +4177,8 @@ export default function UshuaiaRunnerFlorPrototype() {
         state.distance += state.speed * (dtMs / FRAME_MS);
         state.bestDistance = Math.max(state.bestDistance, state.distance);
         state.bestTotal = Math.max(state.bestTotal, Math.floor(state.distance) + state.score);
+        setEndingSaveAvailability(state.endingMs >= ENDING_SAVE_TRIGGER_MS);
+        setEndingRestartAvailability(state.endingMs >= ENDING_RESTART_BUTTON_DELAY_MS);
 
         player.invulnerableMs = 0;
         player.hyperInvulnerableMs = 0;
@@ -4377,6 +4417,39 @@ export default function UshuaiaRunnerFlorPrototype() {
                       ))}
                     </div>
                     <div className="quiz-touch-hint">Podes tocar una opcion o usar el teclado con 1 / 2 / 3.</div>
+                  </div>
+                )}
+                {phase === "ending" && endingRestartReady && (
+                  <div
+                    style={{
+                      position: "absolute",
+                      inset: 0,
+                      zIndex: 22,
+                      display: "flex",
+                      alignItems: "flex-end",
+                      justifyContent: "center",
+                      paddingBottom: 22,
+                      pointerEvents: "none",
+                    }}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => resetGame(true)}
+                      style={{
+                        pointerEvents: "auto",
+                        border: 0,
+                        borderRadius: 16,
+                        background: "#38bdf8",
+                        color: "#020617",
+                        padding: "12px 20px",
+                        fontSize: 16,
+                        fontWeight: 700,
+                        cursor: "pointer",
+                        boxShadow: "0 12px 30px rgba(56, 189, 248, 0.28)",
+                      }}
+                    >
+                      Empezar de nuevo
+                    </button>
                   </div>
                 )}
                 {phase === "gameover" && (
